@@ -21,6 +21,10 @@ def make_random_policy(np_random,owner_idx):
             # randomly nominate someone that is left with a bid between 1 and max
             chosen_nominee = np_random.choice(me_owner.possible_nominees())
             auction.nominate(owner_idx,chosen_nominee.fid,range(1, me_owner.max_bid()+1))
+        elif auction.state == AuctionState.BID:
+            # randomly bid
+            auction.place_bid(owner_idx, np_random.choice(range(0,me_owner.max_bid()+1)))
+
     return random_policy
 
 
@@ -30,7 +34,7 @@ class FantasyFootballAuctionEnv(gym.Env):
     """
     metadata = {"render.modes": ["human", "ansi"]}
 
-    def __init__(self, owner_idx, num_owners, players, money, roster, opponent):
+    def __init__(self, owner_idx, num_owners, players, money, roster, opponent, starter_value):
         """
 
         :param owner_idx: index of the agent player, must be in [0,num_opponents)
@@ -39,6 +43,9 @@ class FantasyFootballAuctionEnv(gym.Env):
         :param money: how much money each owner in the auction starts with
         :param roster: how many slots each owner must fill
         :param opponent: AI to use for all opponents. Possibilities are: 'random' TODO: add a smarter scripted policy
+        :param starter_value: floating point between 0 and 1 inclusive indicating how heavily the final score should
+            be weighted between starter and bench. If 1, for example, bench value will be ignored when calculating
+            winners.
         """
         self.owner_idx = owner_idx
         self.players = players
@@ -51,8 +58,9 @@ class FantasyFootballAuctionEnv(gym.Env):
         self.observation_space = self._observation_space()
         self.done = False
 
-        self.opponent_policy = None
+        self.opponent_policies = None
         self.opponent = opponent
+        self.starter_value = starter_value
 
     def _seed(self, seed=None):
         # Used to seed the random opponent
@@ -156,8 +164,18 @@ class FantasyFootballAuctionEnv(gym.Env):
         return self._encode_auction()
 
     def _close(self):
-        self.opponent_policy = None
-        self.state = None
+        self.owner_idx = None
+        self.players = None
+        self.num_owners = None
+        self.money = None
+        self.roster = None
+        self.auction = None
+        self.action_space = None
+        self.observation_space = None
+        self.done = None
+        self.opponent_policies = None
+        self.opponent = None
+        self.starter_value = None
 
     def _render(self, mode="human", close=False):
         if close:
@@ -182,40 +200,39 @@ class FantasyFootballAuctionEnv(gym.Env):
     def _step(self, action):
         # If already terminal, then don't do anything
         if self.done:
-            return self.state.board.encode(), 0., True, {'state': self.state}
+            return self._encode_auction(), 0., True, {'state': self.state}
 
         if not self._act(action, self.owner_idx):
             # Automatic loss on illegal move
             self.done = True
-            return self.state.board.encode(), -1., True, {'state': self.state}
+            return self._encode_auction(), -1., True, {'state': self.state}
 
         # All opponents play
         if not self.auction.state == AuctionState.DONE:
-            for i in range(0,self.num_owners):
-                if i != self.owner_idx:
-            self.opponent_policy(self.auction)
+            for policy in self.opponent_policies:
+                policy(self.auction)
+
+        self.auction.tick()
 
         # Reward: if nonterminal, then the reward is 0
-        if not self.state.board.is_terminal:
+        if self.auction.state != AuctionState.DONE:
             self.done = False
-            return self.state.board.encode(), 0., False, {'state': self.state}
-
-        # We're in a terminal state. Reward is 1 if won, -1 if lost
-        assert self.state.board.is_terminal
-        self.done = True
-        white_wins = self.state.board.official_score > 0
-        black_wins = self.state.board.official_score < 0
-        player_wins = (white_wins and self.player_color == pachi_py.WHITE) or (
-        black_wins and self.player_color == pachi_py.BLACK)
-        reward = 1. if player_wins else -1. if (white_wins or black_wins) else 0.
-        return self.state.board.encode(), reward, True, {'state': self.state}
-
-    @property
-    def _state(self):
-        return self.state
+            return self._encode_auction(), 0., False
+        else:
+            # We're in a terminal state. Reward is a gradient between -1 and 1 depending on standing
+            self.done = True
+            scores = self.auction.scores(self.starter_value)
+            range = (min(scores),max(scores))
+            my_score = scores[self.owner_idx]
+            distance = (my_score - range[0]) / (range[1] - range[0])
+            reward = ((distance * 2) - 1) ** 2
+            return self.state.board.encode(), reward, True
 
     def _reset_opponent(self):
         if self.opponent == 'random':
-            self.opponent_policy = make_random_policy(self.np_random)
+            # generate a policy for every player but the agent
+            self.opponent_policies = \
+                [make_random_policy(self.np_random,i) for i in
+                 filter(lambda j: j != self.owner_idx, range(0, self.num_owners))]
         else:
             raise error.Error('Unrecognized opponent policy {}'.format(self.opponent))
