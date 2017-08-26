@@ -2,55 +2,61 @@ import gym
 import sys
 from gym import error, spaces, utils
 from gym.utils import seeding
-from fantasy_football_auction.auction import Auction
+from fantasy_football_auction.auction import Auction, AuctionState
 from fantasy_football_auction.position import Position, RosterSlot
 from six import StringIO
+
+### Adversary policies ###
+def make_random_policy(np_random,owner_idx):
+    """
+
+    Policy which makes a random choice mostly among valid choices (instead of among the entire state space)
+    :param np_random: random seed
+    :param owner_idx: id of the owner to play as
+    """
+    def random_policy(auction):
+        me_owner = auction.owners[owner_idx]
+        if auction.state == AuctionState.NOMINATE and \
+            auction.turn_index == owner_idx:
+            # randomly nominate someone that is left with a bid between 1 and max
+            chosen_nominee = np_random.choice(me_owner.possible_nominees())
+            auction.nominate(owner_idx,chosen_nominee.fid,range(1, me_owner.max_bid()+1))
+    return random_policy
 
 
 class FantasyFootballAuctionEnv(gym.Env):
     """
     Fantasy football auction draft, with values for each player pre-determined.
     """
-    metadata = {'render.modes': ['human']}
-
-    '''
-        Go environment. Play against a fixed opponent.
-        '''
     metadata = {"render.modes": ["human", "ansi"]}
 
-    def __init__(self, player_index, num_owners, players, money, roster):
+    def __init__(self, owner_idx, num_owners, players, money, roster, opponent):
         """
 
-        :param player_index: index of the agent player, must be in [0,num_opponents)
+        :param owner_idx: index of the agent player, must be in [0,num_opponents)
         :param num_owners: number of owners total in the game (including the agent)
         :param players: list of fantasy football auction Players that will be drafted
         :param money: how much money each owner in the auction starts with
         :param roster: how many slots each owner must fill
+        :param opponent: AI to use for all opponents. Possibilities are: 'random' TODO: add a smarter scripted policy
         """
-        self.player_index = player_index
+        self.owner_idx = owner_idx
         self.players = players
         self.num_owners = num_owners
         self.money = money
         self.roster = roster
 
         self.auction = Auction(players, num_owners, money, roster)
-
-        """
-       
-        """
         self.action_space = self._action_space()
+        self.observation_space = self._observation_space()
+        self.done = False
 
-        """
-       
-        """
-
-        self.observation_space =self._observation_space()
+        self.opponent_policy = None
+        self.opponent = opponent
 
     def _seed(self, seed=None):
         # Used to seed the random opponent
         self.np_random, seed1 = seeding.np_random(seed)
-        # Derive a random seed.
-        seed2 = seeding.hash_seed(seed1 + 1) % 2 ** 32
         return [seed1]
 
     def _action_space(self):
@@ -145,6 +151,7 @@ class FantasyFootballAuctionEnv(gym.Env):
 
     def _reset(self):
         self.auction = Auction(self.players, self.num_owners, self.money, self.roster)
+        self.done = False
 
         return self._encode_auction()
 
@@ -159,42 +166,34 @@ class FantasyFootballAuctionEnv(gym.Env):
         outfile.write(repr(self.auction) + '\n')
         return outfile
 
-    def _step(self, action):
-        assert self.state.color == self.player_color
+    def _act(self, action, owner_idx):
+        """
 
+        :param action: action to perform, should be an array with 2 values, the first being the
+            player to nominate (0 to not nominate), the second being the bid amount (0 to not bid)
+        :param owner_idx: index of owner who should do the action
+        :return: true if success, false if illegal move
+        """
+        if action[0] > 0:
+            return self.auction.nominate(owner_idx,self.players[action[0]-1],action[1])
+        elif action[1] > 0:
+            return self.auction.place_bid(owner_idx,action[1])
+
+    def _step(self, action):
         # If already terminal, then don't do anything
         if self.done:
             return self.state.board.encode(), 0., True, {'state': self.state}
 
-        # If resigned, then we're done
-        if action == _resign_action(self.board_size):
+        if not self._act(action, self.owner_idx):
+            # Automatic loss on illegal move
             self.done = True
             return self.state.board.encode(), -1., True, {'state': self.state}
 
-        # Play
-        prev_state = self.state
-        try:
-            self.state = self.state.act(action)
-        except pachi_py.IllegalMove:
-            if self.illegal_move_mode == 'raise':
-                six.reraise(*sys.exc_info())
-            elif self.illegal_move_mode == 'lose':
-                # Automatic loss on illegal move
-                self.done = True
-                return self.state.board.encode(), -1., True, {'state': self.state}
-            else:
-                raise error.Error('Unsupported illegal move action: {}'.format(self.illegal_move_mode))
-
-        # Opponent play
-        if not self.state.board.is_terminal:
-            self.state, opponent_resigned = self._exec_opponent_play(self.state, prev_state, action)
-            # After opponent play, we should be back to the original color
-            assert self.state.color == self.player_color
-
-            # If the opponent resigns, then the agent wins
-            if opponent_resigned:
-                self.done = True
-                return self.state.board.encode(), 1., True, {'state': self.state}
+        # All opponents play
+        if not self.auction.state == AuctionState.DONE:
+            for i in range(0,self.num_owners):
+                if i != self.owner_idx:
+            self.opponent_policy(self.auction)
 
         # Reward: if nonterminal, then the reward is 0
         if not self.state.board.is_terminal:
@@ -211,21 +210,12 @@ class FantasyFootballAuctionEnv(gym.Env):
         reward = 1. if player_wins else -1. if (white_wins or black_wins) else 0.
         return self.state.board.encode(), reward, True, {'state': self.state}
 
-    def _exec_opponent_play(self, curr_state, prev_state, prev_action):
-        assert curr_state.color != self.player_color
-        opponent_action = self.opponent_policy(curr_state, prev_state, prev_action)
-        opponent_resigned = opponent_action == _resign_action(self.board_size)
-        return curr_state.act(opponent_action), opponent_resigned
-
     @property
     def _state(self):
         return self.state
 
-    def _reset_opponent(self, board):
+    def _reset_opponent(self):
         if self.opponent == 'random':
             self.opponent_policy = make_random_policy(self.np_random)
-        elif self.opponent == 'pachi:uct:_2400':
-            self.opponent_policy = make_pachi_policy(board=board, engine_type=six.b('uct'),
-                                                     pachi_timestr=six.b('_2400'))  # TODO: strength as argument
         else:
             raise error.Error('Unrecognized opponent policy {}'.format(self.opponent))
