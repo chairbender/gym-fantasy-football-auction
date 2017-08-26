@@ -20,7 +20,7 @@ def make_random_policy(np_random,owner_idx):
             auction.turn_index == owner_idx:
             # randomly nominate someone that is left with a bid between 1 and max
             chosen_nominee = np_random.choice(me_owner.possible_nominees())
-            auction.nominate(owner_idx,chosen_nominee.fid,range(1, me_owner.max_bid()+1))
+            auction.nominate(owner_idx,auction.players.index(chosen_nominee)+1,range(1, me_owner.max_bid()+1))
         elif auction.state == AuctionState.BID:
             # randomly bid
             auction.place_bid(owner_idx, np_random.choice(range(0,me_owner.max_bid()+1)))
@@ -62,6 +62,8 @@ class FantasyFootballAuctionEnv(gym.Env):
         self.opponent = opponent
         self.starter_value = starter_value
 
+        self._seed()
+
     def _seed(self, seed=None):
         # Used to seed the random opponent
         self.np_random, seed1 = seeding.np_random(seed)
@@ -99,21 +101,21 @@ class FantasyFootballAuctionEnv(gym.Env):
         spaces.Tuple(
             (
                 # player position
-                spaces.MultiDiscrete([0 - len(Position) - 1] * len(self.players)),
+                spaces.MultiDiscrete([[0, len(Position) - 1], ] * len(self.players)),
                 # player value
-                spaces.MultiDiscrete([0 - self.money] * len(self.players)),
+                spaces.MultiDiscrete([[0, self.money], ] * len(self.players)),
                 # player owner
-                spaces.MultiDiscrete([0 - self.num_owners] * len(self.players)),
+                spaces.MultiDiscrete([[0, self.num_owners],] * len(self.players)),
                 # player's sold for amount
-                spaces.MultiDiscrete([0 - self.money] * len(self.players)),
+                spaces.MultiDiscrete([[0, self.money],] * len(self.players)),
                 # current nominee
-                spaces.Discrete([0 - len(self.players)]),
+                spaces.Discrete([0, len(self.players)]),
                 # owner's max bid
-                spaces.MultiDiscrete([0 - self.money] * self.num_owners),
+                spaces.MultiDiscrete([[0, self.money], ] * self.num_owners),
                 # owner's current bid
-                spaces.MultiDiscrete([0 - self.money] * self.num_owners),
+                spaces.MultiDiscrete([[0, self.money], ] * self.num_owners),
                 # roster slot types for each slot
-                spaces.MultiDiscrete[[0 - len(RosterSlot.slots) - 1] * len(self.roster)]
+                spaces.MultiDiscrete([[0, len(RosterSlot.slots) - 1], ] * len(self.roster))
             )
         )
 
@@ -143,23 +145,25 @@ class FantasyFootballAuctionEnv(gym.Env):
             # player value
             [player.value for player in self.players],
             #player owner
-            map(player_owners, lambda entry: entry.owner.id),
+            list(map(lambda entry: 0 if entry is None else entry.owner.id, player_owners)),
             #player sell amount
-            map(player_owners, lambda entry: 0 if entry is None else entry.purchase.cost),
+            list(map(lambda entry: 0 if entry is None else entry.purchase.cost, player_owners)),
             #current nominee
-            self.players.find(self.auction.nominee) + 1,
+            0 if self.auction.nominee is None else self.players.index(self.auction.nominee) + 1,
             #owner's max bid
             [owner.max_bid() for owner in self.auction.owners],
             #owner's current bid
             self.auction.bids,
             # roster slot types
-            [RosterSlot.slots.find(roster_slot) for roster_slot in self.roster]
+            [RosterSlot.slots.index(roster_slot) for roster_slot in self.roster]
         )
 
 
     def _reset(self):
         self.auction = Auction(self.players, self.num_owners, self.money, self.roster)
         self.done = False
+
+        self._reset_opponent()
 
         return self._encode_auction()
 
@@ -193,19 +197,19 @@ class FantasyFootballAuctionEnv(gym.Env):
         :return: true if success, false if illegal move
         """
         if action[0] > 0:
-            return self.auction.nominate(owner_idx,self.players[action[0]-1],action[1])
+            return self.auction.nominate(owner_idx,action[0]-1,action[1])
         elif action[1] > 0:
             return self.auction.place_bid(owner_idx,action[1])
 
     def _step(self, action):
         # If already terminal, then don't do anything
         if self.done:
-            return self._encode_auction(), 0., True, {'state': self.state}
+            return self._encode_auction(), 0., True, {}
 
         if not self._act(action, self.owner_idx):
             # Automatic loss on illegal move
             self.done = True
-            return self._encode_auction(), -1., True, {'state': self.state}
+            return self._encode_auction(), -1., True, {}
 
         # All opponents play
         if not self.auction.state == AuctionState.DONE:
@@ -217,7 +221,7 @@ class FantasyFootballAuctionEnv(gym.Env):
         # Reward: if nonterminal, then the reward is 0
         if self.auction.state != AuctionState.DONE:
             self.done = False
-            return self._encode_auction(), 0., False
+            return self._encode_auction(), 0., False, {}
         else:
             # We're in a terminal state. Reward is a gradient between -1 and 1 depending on standing
             self.done = True
@@ -226,7 +230,7 @@ class FantasyFootballAuctionEnv(gym.Env):
             my_score = scores[self.owner_idx]
             distance = (my_score - range[0]) / (range[1] - range[0])
             reward = ((distance * 2) - 1) ** 2
-            return self.state.board.encode(), reward, True
+            return self.state.board.encode(), reward, True, {}
 
     def _reset_opponent(self):
         if self.opponent == 'random':
