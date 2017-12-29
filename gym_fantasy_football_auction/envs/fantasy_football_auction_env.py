@@ -10,7 +10,7 @@ import gym
 import sys
 from gym import error, spaces, utils
 from gym.utils import seeding
-from fantasy_football_auction.auction import Auction, AuctionState
+from fantasy_football_auction.auction import Auction, AuctionState, InvalidActionError
 from fantasy_football_auction.position import Position, RosterSlot
 from six import StringIO
 
@@ -44,12 +44,6 @@ class FantasyFootballAuctionEnv(gym.Env):
         self.observation_space = self._observation_space()
         self.done = False
 
-        self._seed()
-
-    def _seed(self, seed=None):
-        # Used to seed the random opponent
-        self.np_random, seed1 = seeding.np_random(seed)
-        return [seed1]
 
     def _action_space(self):
         """
@@ -108,20 +102,6 @@ class FantasyFootballAuctionEnv(gym.Env):
 
         return spaces.MultiDiscrete(dimensions)
 
-    def _playerOwnersPurchases(self):
-        """
-
-        :return: an array with each element corrresponding to each player in self.players indicating the owner
-        of the player and the purchase of that player. None indicates no owner. The element is a dictionary with an owner and a purchase
-        """
-        result = [None] * len(self.players)
-        for owner in self.auction.owners:
-            for purchase in owner.purchases:
-                player_index = self.players.index(purchase.player)
-                result[player_index] = {owner: owner, purchase: purchase}
-
-        return result
-
     def _encode_auction(self):
         """
 
@@ -176,12 +156,9 @@ class FantasyFootballAuctionEnv(gym.Env):
 
         return observation
 
-
     def _reset(self):
         self.auction = Auction(self.players, self.num_owners, self.money, self.roster)
         self.done = False
-
-        self._reset_opponent()
 
         return self._encode_auction()
 
@@ -200,7 +177,6 @@ class FantasyFootballAuctionEnv(gym.Env):
         self.starter_value = None
         self.opponents = None
 
-
     def _render(self, mode="human", close=False):
         if close:
             return
@@ -208,18 +184,28 @@ class FantasyFootballAuctionEnv(gym.Env):
         outfile.write(repr(self.auction) + '\n')
         return outfile
 
-    def _act(self, action, owner_idx):
+    def _act(self, action):
         """
 
         :param action: action to perform, should be an array with 2 values, the first being the
-            player to nominate (0 to not nominate), the second being the bid amount (0 to not bid)
-        :param owner_idx: index of owner who should do the action
-        :return: true if success, false if illegal move
+            player index to choose (0 to not nominate), the second being the bid amount.
+        :return boolean: true iff action was legal
         """
-        if action[0] > 0:
-            return self.auction.nominate(owner_idx,action[0]-1,action[1])
-        elif action[1] > 0:
-            return self.auction.place_bid(owner_idx,action[1])
+        try:
+            if self.auction.state == AuctionState.NOMINATE and self.auction.turn_index == 0:
+                self.auction.nominate(0, action[0], action[1])
+            elif self.auction.state == AuctionState.BID:
+                # has to be a bid for the nominee
+                nominee_idx = -1;
+                for i, player in enumerate(self.auction.players):
+                    if player == self.auction.nominee:
+                        nominee_idx = i
+                if action[0] == nominee_idx:
+                    self.auction.place_bid(0, action[1])
+        except InvalidActionError:
+            return False
+
+        return True
 
     def _step(self, action):
         """
@@ -230,28 +216,30 @@ class FantasyFootballAuctionEnv(gym.Env):
             observation is a tuple representing the current observation state within observation space.
             reward is a float representing the reward achieved by the previous action
             done is a boolean indicating whether the task is done and it's time to restart
-            info is a diagnostic tool for debugging
+            info is a diagnostic tool for debugging - we just return the Auction object
+                for easy inspection of the auction state
         """
         # If already terminal, then don't do anything
         if self.done:
-            return self._encode_auction(), 0., True, {}
+            return self._encode_auction(), 0., True, self.auction
 
-        if not self._act(action, self.owner_idx):
+        if not self._act(action):
             # Automatic loss on illegal move
             self.done = True
-            return self._encode_auction(), -1., True, {}
+            return self._encode_auction(), -1., True, self.auction
 
         # All opponents play
         if not self.auction.state == AuctionState.DONE:
-            for policy in self.opponent_policies:
-                policy(self.auction)
+            for opponent in self.opponents:
+                # TODO: Implement this in FantasyFootballAgent class
+                opponent.act(self.auction)
 
         self.auction.tick()
 
         # Reward: if nonterminal, then the reward is 0
         if self.auction.state != AuctionState.DONE:
             self.done = False
-            return self._encode_auction(), 0., False, {}
+            return self._encode_auction(), 0., False, self.auction
         else:
             # We're in a terminal state. Reward is a gradient between -1 and 1 depending on standing
             self.done = True
@@ -260,13 +248,4 @@ class FantasyFootballAuctionEnv(gym.Env):
             my_score = scores[self.owner_idx]
             distance = (my_score - range[0]) / (range[1] - range[0])
             reward = ((distance * 2) - 1) ** 2
-            return self.state.board.encode(), reward, True, {}
-
-    def _reset_opponent(self):
-        if self.opponent == 'random':
-            # generate a policy for every player but the agent
-            self.opponent_policies = \
-                [make_random_policy(self.np_random,i) for i in
-                 filter(lambda j: j != self.owner_idx, range(0, self.num_owners))]
-        else:
-            raise error.Error('Unrecognized opponent policy {}'.format(self.opponent))
+            return self.state.board.encode(), reward, True, self.auction
