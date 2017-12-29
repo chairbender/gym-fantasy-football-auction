@@ -1,17 +1,12 @@
 """
 This defines the fantasy football task environment.
 
-TODO: Fix this so it works and add unit tests.
-TODO: Fix how the observation and action space is set up based on README
-TODO: Define FantasyFootballAgent and an implementation (simple scripted agent).
 """
 
 import gym
 import sys
-from gym import error, spaces, utils
-from gym.utils import seeding
+from gym import spaces
 from fantasy_football_auction.auction import Auction, AuctionState, InvalidActionError
-from fantasy_football_auction.position import Position, RosterSlot
 from six import StringIO
 
 
@@ -20,6 +15,16 @@ class FantasyFootballAuctionEnv(gym.Env):
     Fantasy football auction draft, with values for each draftable player pre-determined.
 
     The agent is always assumed to be the first (owner index 0) owner.
+
+    Attributes:
+        :ivar Auction auction: the current auction game state. Read only.
+        :ivar list(FantasyFootballAgent) opponents: opponents of owner 0. Read only
+        :ivar list(Player) players: the draftable players. Read only.
+        :ivar int money: the starting money. Read only.
+        :ivar list(RosterSlot) roster: the roster each owner must fill. Read only.
+        :ivar float starter_value: the weighting of the start vs the bench during scoring. Read only.
+        :ivar boolean done: Whether the current match is done. Read only.
+        :ivar Error error: if any error happened internally in the auction, it is stored here. Read only.
     """
     metadata = {"render.modes": ["human", "ansi"]}
 
@@ -39,10 +44,11 @@ class FantasyFootballAuctionEnv(gym.Env):
         self.roster = roster
         self.starter_value = starter_value
 
-        self.auction = Auction(players, len(opponents), money, roster)
+        self.auction = Auction(players, len(opponents)+1, money, roster)
         self.action_space = self._action_space()
         self.observation_space = self._observation_space()
         self.done = False
+        self.error = None
 
 
     def _action_space(self):
@@ -60,7 +66,7 @@ class FantasyFootballAuctionEnv(gym.Env):
         :return: the action space
         """
 
-        return spaces.MultiDiscrete([[0, len(self.players)], [0, self.money]])
+        return spaces.MultiDiscrete([[0, len(self.players)-1], [0, self.money]])
 
     def _observation_space(self):
         """
@@ -129,16 +135,9 @@ class FantasyFootballAuctionEnv(gym.Env):
 
         # bid to beat
         observation.append(self.auction.bid)
-        max_bid = -1
-        for bid in enumerate(self.auction.bids):
-            max_bid = max(max_bid, bid)
-        max_bid_idx = -1
-        for i, bid in enumerate(self.auction.bids):
-            if max_bid == bid:
-                max_bid_idx = i
 
         # winning bidder
-        observation.append(max_bid_idx)
+        observation.append(self.auction.winning_owner_index())
 
         # player status, one per player
         for player in self.auction.players:
@@ -184,7 +183,7 @@ class FantasyFootballAuctionEnv(gym.Env):
         outfile.write(repr(self.auction) + '\n')
         return outfile
 
-    def _act(self, action):
+    def _act(self, action, owner_idx):
         """
 
         :param action: action to perform, should be an array with 2 values, the first being the
@@ -192,17 +191,16 @@ class FantasyFootballAuctionEnv(gym.Env):
         :return boolean: true iff action was legal
         """
         try:
-            if self.auction.state == AuctionState.NOMINATE and self.auction.turn_index == 0:
-                self.auction.nominate(0, action[0], action[1])
-            elif self.auction.state == AuctionState.BID:
-                # has to be a bid for the nominee
-                nominee_idx = -1;
-                for i, player in enumerate(self.auction.players):
-                    if player == self.auction.nominee:
-                        nominee_idx = i
-                if action[0] == nominee_idx:
-                    self.auction.place_bid(0, action[1])
-        except InvalidActionError:
+            # 0 bid means do nothing
+            if action[1] != 0:
+                if self.auction.state == AuctionState.NOMINATE and self.auction.turn_index == owner_idx:
+                    self.auction.nominate(owner_idx, action[0], action[1])
+                elif self.auction.state == AuctionState.BID:
+                    # has to be a bid for the nominee
+                    if action[0] == self.auction.nominee_index():
+                        self.auction.place_bid(owner_idx, action[1])
+        except InvalidActionError as err:
+            self.error = err
             return False
 
         return True
@@ -216,36 +214,39 @@ class FantasyFootballAuctionEnv(gym.Env):
             observation is a tuple representing the current observation state within observation space.
             reward is a float representing the reward achieved by the previous action
             done is a boolean indicating whether the task is done and it's time to restart
-            info is a diagnostic tool for debugging - we just return the Auction object
-                for easy inspection of the auction state
+            info is a diagnostic tool for debugging - we just return a dictionary with auction: Auction object
+                and error: any error that was raised by Auction
         """
         # If already terminal, then don't do anything
         if self.done:
-            return self._encode_auction(), 0., True, self.auction
+            return self._encode_auction(), 0., True, {'auction': self.auction, 'error': self.error}
 
-        if not self._act(action):
+        if not self._act(action, 0):
             # Automatic loss on illegal move
             self.done = True
-            return self._encode_auction(), -1., True, self.auction
+            return self._encode_auction(), -1., True, {'auction': self.auction, 'error': self.error}
 
         # All opponents play
         if not self.auction.state == AuctionState.DONE:
-            for opponent in self.opponents:
-                # TODO: Implement this in FantasyFootballAgent class
-                opponent.act(self.auction)
+            for i, opponent in enumerate(self.opponents):
+                # Automatic loss on illegal move
+                if not self._act(opponent.act(self.auction, i+1), i+1):
+                    # Automatic loss on illegal move
+                    self.done = True
+                    return self._encode_auction(), -1., True, {'auction': self.auction, 'error': self.error}
 
         self.auction.tick()
 
         # Reward: if nonterminal, then the reward is 0
         if self.auction.state != AuctionState.DONE:
             self.done = False
-            return self._encode_auction(), 0., False, self.auction
+            return self._encode_auction(), 0., False, {'auction': self.auction, 'error': self.error}
         else:
             # We're in a terminal state. Reward is a gradient between -1 and 1 depending on standing
             self.done = True
             scores = self.auction.scores(self.starter_value)
-            range = (min(scores),max(scores))
-            my_score = scores[self.owner_idx]
+            range = (min(scores), max(scores))
+            my_score = scores[0]
             distance = (my_score - range[0]) / (range[1] - range[0])
             reward = ((distance * 2) - 1) ** 2
-            return self.state.board.encode(), reward, True, self.auction
+            return self._encode_auction(), reward, True, {'auction': self.auction, 'error': self.error}
