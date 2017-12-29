@@ -25,6 +25,8 @@ class FantasyFootballAuctionEnv(gym.Env):
         :ivar float starter_value: the weighting of the start vs the bench during scoring. Read only.
         :ivar boolean done: Whether the current match is done. Read only.
         :ivar Error error: if any error happened internally in the auction, it is stored here. Read only.
+        :ivar spaces.MultiDiscrete action_space: action space for this env
+        :ivar spaces.MultiDiscrete observation_space: observation space for this env
     """
     metadata = {"render.modes": ["human", "ansi"]}
 
@@ -49,7 +51,6 @@ class FantasyFootballAuctionEnv(gym.Env):
         self.observation_space = self._observation_space()
         self.done = False
         self.error = None
-
 
     def _action_space(self):
         """
@@ -140,11 +141,8 @@ class FantasyFootballAuctionEnv(gym.Env):
         observation.append(self.auction.winning_owner_index())
 
         # player status, one per player
-        for player in self.auction.players:
-            owner_idx = -1
-            for i, owner in enumerate(self.auction.owners):
-                if owner.owns(player):
-                    owner_idx = i
+        for i, player in enumerate(self.auction.players):
+            owner_idx = self.auction.owner_index_of_player(i)
             if owner_idx != -1:
                 observation.append(owner_idx)
             else:

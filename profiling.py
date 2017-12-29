@@ -4,6 +4,8 @@ For investigating performance issues
 import time
 import random
 import cProfile
+from pstats import Stats
+
 import pkg_resources
 from fantasy_football_auction.player import players_from_fantasypros_cheatsheet
 from fantasy_football_auction.position import RosterSlot
@@ -49,8 +51,10 @@ def test_with_seed(seed):
 def perf_test():
     try:
         i = 0
-        for i in range(100):
+        for i in range(200):
             test_with_seed(int(round(time.time())))
+            if i % 10 == 0:
+                print("finished iteration " + str(i))
     except Exception as err:
         print("error on test iteration " + str(i))
         raise err
