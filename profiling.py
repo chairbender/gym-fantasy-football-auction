@@ -1,9 +1,9 @@
 """
-This defines the fantasy football task environment.
-
+For investigating performance issues
 """
+import time
 import random
-from unittest import TestCase
+import cProfile
 import pkg_resources
 from fantasy_football_auction.player import players_from_fantasypros_cheatsheet
 from fantasy_football_auction.position import RosterSlot
@@ -11,10 +11,11 @@ from gym_fantasy_football_auction.envs import FantasyFootballAuctionEnv
 from gym_fantasy_football_auction.envs.agents import SimpleScriptedFantasyFootballAgent
 
 PLAYERS_CSV_PATH = pkg_resources.resource_filename('gym_fantasy_football_auction.envs', 'data/cheatsheet.csv')
+players = players_from_fantasypros_cheatsheet(PLAYERS_CSV_PATH)
 
 def test_with_seed(seed):
     random.seed(seed)
-    players = players_from_fantasypros_cheatsheet(PLAYERS_CSV_PATH)
+
     # create a mock game with 6 of this agent and use this agent in it, verify that the game completes
     me = SimpleScriptedFantasyFootballAgent()
     opponents = [SimpleScriptedFantasyFootballAgent(), SimpleScriptedFantasyFootballAgent(),
@@ -38,18 +39,20 @@ def test_with_seed(seed):
                     raise info['error']
                 break
     except Exception as err:
-        print("On turn count " + str(turncount))
+        print("Error on turn count " + str(turncount))
+        print("With seed " + str(seed))
         print(env.auction)
         raise err
 
 
+# run 100 random games and see how it performs
+def perf_test():
+    try:
+        i = 0
+        for i in range(100):
+            test_with_seed(int(round(time.time())))
+    except Exception as err:
+        print("error on test iteration " + str(i))
+        raise err
 
-
-class FantasyFootballAuctionEnvTestCase(TestCase):
-    def test_env_with_simple_agent(self):
-        test_with_seed(123)
-        test_with_seed(456)
-        test_with_seed(789)
-        test_with_seed(1514540459)
-
-
+cProfile.run('perf_test()')
