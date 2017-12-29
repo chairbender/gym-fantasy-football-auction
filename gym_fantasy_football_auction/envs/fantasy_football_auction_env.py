@@ -154,8 +154,10 @@ class FantasyFootballAuctionEnv(gym.Env):
         return observation
 
     def _reset(self):
-        self.auction = Auction(self.players, self.num_owners, self.money, self.roster)
+        self.auction = Auction(self.players, len(self.opponents) + 1, self.money, self.roster)
         self.done = False
+        for opponent in self.opponents:
+            opponent.reset()
 
         return self._encode_auction()
 

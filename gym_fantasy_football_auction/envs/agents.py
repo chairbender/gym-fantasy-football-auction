@@ -25,6 +25,13 @@ class FantasyFootballAgent:
         """
         pass
 
+    @abc.abstractmethod
+    def reset(self):
+        """
+        invoked when agent should be reset to initial state
+        """
+        pass
+
 
 class SimpleScriptedFantasyFootballAgent(FantasyFootballAgent):
     """
@@ -33,6 +40,10 @@ class SimpleScriptedFantasyFootballAgent(FantasyFootballAgent):
     """
 
     def __init__(self):
+        self.target = 0
+        self.target_player = None
+
+    def reset(self):
         self.target = 0
         self.target_player = None
 
