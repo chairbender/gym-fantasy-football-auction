@@ -52,6 +52,19 @@ class FantasyFootballAuctionEnv(gym.Env):
         self.done = False
         self.error = None
 
+    @classmethod
+    def action_index(cls, auction, player_index, bid):
+        """
+
+        :param auction auction for which the index should be calculated
+        :param player_index: index of player in the players list
+        :param bid: bid amount
+        :return int: index into the flattened action space, representing the
+            action of nominating / bidding for the specified player with the specified
+            bid amount.
+        """
+        return player_index * auction.money + bid
+
     def _action_space(self):
         """
         See README.md for details
@@ -61,13 +74,14 @@ class FantasyFootballAuctionEnv(gym.Env):
         player - one column for every integer from 0 to the maximum possible
         bid amount.
 
-        This is represented as a MultiDiscrete with the first dimension as the player
-        index and the second as the money
+        We flatten this 2-d matrix into a list to get our one action
+
+        It's flattened, so this is represented as a Discrete
 
         :return: the action space
         """
 
-        return spaces.MultiDiscrete([[0, len(self.players)-1], [0, self.money]])
+        return spaces.Discrete((len(self.players)-1) * self.money)
 
     def _observation_space(self):
         """
@@ -95,7 +109,7 @@ class FantasyFootballAuctionEnv(gym.Env):
         """
         dimensions = []
         # one per owner - max bid
-        for i in range(len(self.opponents)):
+        for i in range(len(self.opponents)+1):
             dimensions.append([0, self.money])
 
         # bid to beat
@@ -132,13 +146,19 @@ class FantasyFootballAuctionEnv(gym.Env):
 
         # one per owner - max bid
         for owner in self.auction.owners:
-            observation.append([owner.max_bid()])
+            observation.append(owner.max_bid())
 
         # bid to beat
-        observation.append(self.auction.bid)
+        if self.auction.bid is None:
+            observation.append(0)
+        else:
+            observation.append(self.auction.bid)
 
         # winning bidder
-        observation.append(self.auction.winning_owner_index())
+        if self.auction.winning_owner_index() == -1:
+            observation.append(0)
+        else:
+            observation.append(self.auction.winning_owner_index())
 
         # player status, one per player
         for i, player in enumerate(self.auction.players):
@@ -186,19 +206,27 @@ class FantasyFootballAuctionEnv(gym.Env):
     def _act(self, action, owner_idx):
         """
 
-        :param action: action to perform, should be an array with 2 values, the first being the
-            player index to choose (0 to not nominate), the second being the bid amount.
+        :param int action: action to perform, should be a single integer value,
+            representing the index in the flattened action space of the action
+            to perform.
         :return boolean: true iff action was legal
         """
+
+        # based on the index, figure out the action
+        # player index is the row (in the original 2-d matrix)
+        player_index = action // self.money
+        # bid is the column(in the original 2-d matrix)
+        bid = action % self.money
+
         try:
             # 0 bid means do nothing
-            if action[1] != 0:
+            if bid != 0:
                 if self.auction.state == AuctionState.NOMINATE and self.auction.turn_index == owner_idx:
-                    self.auction.nominate(owner_idx, action[0], action[1])
+                    self.auction.nominate(owner_idx, player_index, bid)
                 elif self.auction.state == AuctionState.BID:
                     # has to be a bid for the nominee
-                    if action[0] == self.auction.nominee_index():
-                        self.auction.place_bid(owner_idx, action[1])
+                    if player_index == self.auction.nominee_index():
+                        self.auction.place_bid(owner_idx, bid)
         except InvalidActionError as err:
             self.error = err
             return False

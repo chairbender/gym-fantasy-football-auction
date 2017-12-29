@@ -13,7 +13,7 @@ The only action an owner takes in an auction is to nominate a player
 Each draftable player (regardless of what has happened in a game) has
 an index from 0 to `number_of_draftable_players - 1`.
 
-We represent the action space as a 2-dimensional matrix. The row 
+Think of the action space as a 2-dimensional matrix. The row 
 represents the player index. The column represents the bid on that
 player - one column for every integer from 0 to the maximum possible
 bid amount. 
@@ -25,6 +25,9 @@ and column 30.
 Similarly, assuming player 45 is currently nominated at 22 dollars,
 the action of raising the bid to 25 dollars would be represented by
 the state at row 45 and column 23.
+
+Then, our action space is just one simple modification on top of this - 
+we flatten the 2-d matrix into a list.
 
 # Observation Space
 
