@@ -1,6 +1,9 @@
 """
-This defines the fantasy football task environments and adversary policies.
+This defines the fantasy football task environment.
 
+TODO: Fix this so it works and add unit tests.
+TODO: Fix how the observation and action space is set up based on README
+TODO: Define FantasyFootballAgent and an implementation (simple scripted agent).
 """
 
 import gym
@@ -11,61 +14,35 @@ from fantasy_football_auction.auction import Auction, AuctionState
 from fantasy_football_auction.position import Position, RosterSlot
 from six import StringIO
 
-### Adversary policies ###
-def make_random_policy(np_random,owner_idx):
-    """
-
-    Policy which makes a random choice mostly among valid choices (instead of among the entire state space)
-    :param np_random: random seed
-    :param owner_idx: id of the owner to play as
-    """
-    def random_policy(auction):
-        me_owner = auction.owners[owner_idx]
-        if auction.state == AuctionState.NOMINATE and \
-            auction.turn_index == owner_idx:
-            # randomly nominate someone that is left with a bid between 1 and max
-            chosen_nominee = np_random.choice(me_owner.possible_nominees())
-            auction.nominate(owner_idx,auction.players.index(chosen_nominee)+1,range(1, me_owner.max_bid()+1))
-        elif auction.state == AuctionState.BID:
-            # randomly bid
-            auction.place_bid(owner_idx, np_random.choice(range(0,me_owner.max_bid()+1)))
-
-    return random_policy
-
 
 class FantasyFootballAuctionEnv(gym.Env):
     """
-    Fantasy football auction draft, with values for each player pre-determined.
+    Fantasy football auction draft, with values for each draftable player pre-determined.
+
+    The agent is always assumed to be the first (owner index 0) owner.
     """
     metadata = {"render.modes": ["human", "ansi"]}
 
-    def __init__(self, owner_idx, num_owners, players, money, roster, opponent, starter_value):
+    def __init__(self, opponents, players, money, roster, starter_value):
         """
-
-        :param owner_idx: index of the agent player, must be in [0,num_opponents)
-        :param num_owners: number of owners total in the game (including the agent)
-        :param players: list of fantasy football auction Players that will be drafted
-        :param money: how much money each owner in the auction starts with
-        :param roster: how many slots each owner must fill
-        :param opponent: AI to use for all opponents. Possibilities are: 'random' TODO: add a smarter scripted policy
+        :param list(FantasyFootballAgent) opponents: the other opponents in this game
+        :param list(Player) players: list of fantasy football auction Players that will be drafted
+        :param int money: how much money each owner in the auction starts with
+        :param list(RosterSlot) roster: the slots each owner must fill
         :param starter_value: floating point between 0 and 1 inclusive indicating how heavily the final score should
             be weighted between starter and bench. If 1, for example, bench value will be ignored when calculating
             winners.
         """
-        self.owner_idx = owner_idx
+        self.opponents = opponents
         self.players = players
-        self.num_owners = num_owners
         self.money = money
         self.roster = roster
+        self.starter_value = starter_value
 
-        self.auction = Auction(players, num_owners, money, roster)
+        self.auction = Auction(players, len(opponents), money, roster)
         self.action_space = self._action_space()
         self.observation_space = self._observation_space()
         self.done = False
-
-        self.opponent_policies = None
-        self.opponent = opponent
-        self.starter_value = starter_value
 
         self._seed()
 
@@ -76,9 +53,15 @@ class FantasyFootballAuctionEnv(gym.Env):
 
     def _action_space(self):
         """
-         We model the action space like so:
-        - Nomination for all remaining draftable players [0...len(players)] (0 is a noop), index players starting at 1
-        - Bid amount [0 - money] (used for nomination starting bid and during bid rounds)
+        See README.md for details
+
+         We represent the action space as a 2-dimensional matrix. The row
+        represents the player index. The column represents the bid on that
+        player - one column for every integer from 0 to the maximum possible
+        bid amount.
+
+        This is represented as a MultiDiscrete with the first dimension as the player
+        index and the second as the money
 
         :return: the action space
         """
@@ -87,42 +70,43 @@ class FantasyFootballAuctionEnv(gym.Env):
 
     def _observation_space(self):
         """
-         Observation space is a bit more complicated. For referencing players we go by index
-        of the players list parameter.
+         See README.md for details.
 
-        Each player's position - MultiDiscrete [0-numpositions]*numplayers
-        Each player's value - multiDiscrete [0-money] * numplayers
-        Each player's owner - multiDiscrete [0-numplayers] * numplayers 0 for no owner 1 for owner 1, etc...
-        Each player's sold-for amount (0 for being still draftable) [0-money] * numplayers
+        This returns a multidiscrete with the following dimensions (in this order).
 
-        Current nominee [0 - numplayers] (0 for no nominee)
+        Say we have p draftable players, m starting money, and
+        n owners in the game.
+        We have these dimensions (in the order described):
+        n dimensions in the range (0 - m): the current max bid for each owner
+        1 dimension in the range (0 - m): the current bid to beat for the current nominee
+        1 dimension in the range (0 - n): the index of the owner who has the current bid to beat
+            for the current nominee
+        p dimensions in the range (0 - n+1):
+          * each dimension represents a draftable player's 'state'
+          * a value of 0 - n-1 indicates that the owner with that index owns that player
+          * a value of n indicates that the player is undrafted
+          * a value of n+1 indicates that the player is the current nominee
 
-        Each owner's current max bid ability [0 - money] * numowners
-        Each owner's current bid [0 - money] * numowners
-        roster slot types for each owner
+        Each of these is represented in a multidiscrete with the dimensions in the order
+        specified above.
 
         :return: the observation space
         """
-        spaces.Tuple(
-            (
-                # player position
-                spaces.MultiDiscrete([[0, len(Position) - 1], ] * len(self.players)),
-                # player value
-                spaces.MultiDiscrete([[0, self.money], ] * len(self.players)),
-                # player owner
-                spaces.MultiDiscrete([[0, self.num_owners],] * len(self.players)),
-                # player's sold for amount
-                spaces.MultiDiscrete([[0, self.money],] * len(self.players)),
-                # current nominee
-                spaces.Discrete([0, len(self.players)]),
-                # owner's max bid
-                spaces.MultiDiscrete([[0, self.money], ] * self.num_owners),
-                # owner's current bid
-                spaces.MultiDiscrete([[0, self.money], ] * self.num_owners),
-                # roster slot types for each slot
-                spaces.MultiDiscrete([[0, len(RosterSlot.slots) - 1], ] * len(self.roster))
-            )
-        )
+        dimensions = []
+        # one per owner - max bid
+        for i in range(len(self.opponents)):
+            dimensions.append([0, self.money])
+
+        # bid to beat
+        dimensions.append([0, self.money])
+        # winning bidder
+        dimensions.append([0, len(self.opponents)])
+
+        # player status, one per player
+        for i in range(len(self.players)):
+            dimensions.append([0, len(self.opponents)+1])
+
+        return spaces.MultiDiscrete(dimensions)
 
     def _playerOwnersPurchases(self):
         """
@@ -141,27 +125,56 @@ class FantasyFootballAuctionEnv(gym.Env):
     def _encode_auction(self):
         """
 
+        Array with the value of each dimension:
+
+        We have these dimensions (in the order described):
+        n dimensions in the range (0 - m): the current max bid for each owner
+        1 dimension in the range (0 - m): the current bid to beat for the current nominee
+        1 dimension in the range (0 - n): the index of the owner who has the current bid to beat
+            for the current nominee
+        p dimensions in the range (0 - n+1):
+          * each dimension represents a draftable player's 'state'
+          * a value of 0 - n-1 indicates that the owner with that index owns that player
+          * a value of n indicates that the player is undrafted
+          * a value of n+1 indicates that the player is the current nominee
+
         :return: the observation space of the current auction
         """
-        player_owners = self._playerOwnersPurchases()
-        return (
-            # player position
-            [player.position.value for player in self.players],
-            # player value
-            [player.value for player in self.players],
-            #player owner
-            list(map(lambda entry: 0 if entry is None else entry.owner.id, player_owners)),
-            #player sell amount
-            list(map(lambda entry: 0 if entry is None else entry.purchase.cost, player_owners)),
-            #current nominee
-            0 if self.auction.nominee is None else self.players.index(self.auction.nominee) + 1,
-            #owner's max bid
-            [owner.max_bid() for owner in self.auction.owners],
-            #owner's current bid
-            self.auction.bids,
-            # roster slot types
-            [RosterSlot.slots.index(roster_slot) for roster_slot in self.roster]
-        )
+
+        observation = []
+
+        # one per owner - max bid
+        for owner in self.auction.owners:
+            observation.append([owner.max_bid()])
+
+        # bid to beat
+        observation.append(self.auction.bid)
+        max_bid = -1
+        for bid in enumerate(self.auction.bids):
+            max_bid = max(max_bid, bid)
+        max_bid_idx = -1
+        for i, bid in enumerate(self.auction.bids):
+            if max_bid == bid:
+                max_bid_idx = i
+
+        # winning bidder
+        observation.append(max_bid_idx)
+
+        # player status, one per player
+        for player in self.auction.players:
+            owner_idx = -1
+            for i, owner in enumerate(self.auction.owners):
+                if owner.owns(player):
+                    owner_idx = i
+            if owner_idx != -1:
+                observation.append(owner_idx)
+            else:
+                if player == self.auction.nominee:
+                    observation.append(len(self.auction.owners) + 1)
+                else:
+                    observation.append(len(self.auction.owners))
+
+        return observation
 
 
     def _reset(self):
@@ -185,6 +198,8 @@ class FantasyFootballAuctionEnv(gym.Env):
         self.opponent_policies = None
         self.opponent = None
         self.starter_value = None
+        self.opponents = None
+
 
     def _render(self, mode="human", close=False):
         if close:
@@ -207,6 +222,16 @@ class FantasyFootballAuctionEnv(gym.Env):
             return self.auction.place_bid(owner_idx,action[1])
 
     def _step(self, action):
+        """
+
+        :param action: action state to choose within action space
+        :return tuple:
+            (observation, reward, done, info)
+            observation is a tuple representing the current observation state within observation space.
+            reward is a float representing the reward achieved by the previous action
+            done is a boolean indicating whether the task is done and it's time to restart
+            info is a diagnostic tool for debugging
+        """
         # If already terminal, then don't do anything
         if self.done:
             return self._encode_auction(), 0., True, {}

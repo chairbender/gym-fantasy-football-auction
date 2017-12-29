@@ -76,7 +76,7 @@ More formally - if we have p draftable players, m starting money, and n owners,
 we have `n + p + 2` dimensions:
 * n dimensions in the range (0 - m): the current max bid for each owner
 * 1 dimension in the range (0 - m): the current bid to beat for the current nominee
-* 1 dimension in the range (0 - n): the index of the owner who has the current bid to beat 
+* 1 dimension in the range (0 - n-1): the index of the owner who has the current bid to beat 
     for the current nominee
 * p dimensions in the range (0 - `n+1`):
   * each dimension represents a draftable player's 'state'
