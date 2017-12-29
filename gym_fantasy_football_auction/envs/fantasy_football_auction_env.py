@@ -1,3 +1,8 @@
+"""
+This defines the fantasy football task environments and adversary policies.
+
+"""
+
 import gym
 import sys
 from gym import error, spaces, utils
