@@ -64,8 +64,6 @@ def test_gym_env_with_seed(env, seed):
         raise err
 
 
-
-
 class FantasyFootballAuctionEnvTestCase(TestCase):
     def test_env_with_simple_agent(self):
         test_with_seed(123)
@@ -74,7 +72,32 @@ class FantasyFootballAuctionEnvTestCase(TestCase):
         test_with_seed(1514540459)
 
     def test_easy_env_with_gym(self):
-        env = gym.make('FantasyFootballAuction-2OwnerSmallRoster-v0')
+        env = gym.make('FantasyFootballAuction-2OwnerSmallRosterSimpleScriptedOpponent-v0')
+        test_gym_env_with_seed(env, 111)
+        test_gym_env_with_seed(env, 222)
+        test_gym_env_with_seed(env, 333)
+
+        env = gym.make('FantasyFootballAuction-4OwnerSmallRosterSimpleScriptedOpponent-v0')
+        test_gym_env_with_seed(env, 111)
+        test_gym_env_with_seed(env, 222)
+        test_gym_env_with_seed(env, 333)
+
+        env = gym.make('FantasyFootballAuction-4OwnerMediumRosterSimpleScriptedOpponent-v0')
+        test_gym_env_with_seed(env, 111)
+        test_gym_env_with_seed(env, 222)
+        test_gym_env_with_seed(env, 333)
+
+        env = gym.make('FantasyFootballAuction-6OwnerMediumRosterSimpleScriptedOpponent-v0')
+        test_gym_env_with_seed(env, 111)
+        test_gym_env_with_seed(env, 222)
+        test_gym_env_with_seed(env, 333)
+
+        env = gym.make('FantasyFootballAuction-4OwnerFullRosterSimpleScriptedOpponent-v0')
+        test_gym_env_with_seed(env, 111)
+        test_gym_env_with_seed(env, 222)
+        test_gym_env_with_seed(env, 333)
+
+        env = gym.make('FantasyFootballAuction-6OwnerFullRosterSimpleScriptedOpponent-v0')
         test_gym_env_with_seed(env, 111)
         test_gym_env_with_seed(env, 222)
         test_gym_env_with_seed(env, 333)
