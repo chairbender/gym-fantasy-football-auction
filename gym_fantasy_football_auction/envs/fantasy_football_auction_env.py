@@ -7,6 +7,7 @@ import gym
 import sys
 from gym import spaces
 from fantasy_football_auction.auction import Auction, AuctionState, InvalidActionError
+from math import exp
 from six import StringIO
 
 
@@ -51,6 +52,7 @@ class FantasyFootballAuctionEnv(gym.Env):
         self.observation_space = self._observation_space()
         self.done = False
         self.error = None
+        self.turn_count = 0
 
     @classmethod
     def action_index(cls, auction, player_index, bid):
@@ -245,30 +247,36 @@ class FantasyFootballAuctionEnv(gym.Env):
             info is a diagnostic tool for debugging - we just return a dictionary with auction: Auction object
                 and error: any error that was raised by Auction
         """
+
+        self.turn_count += 1
+
         # If already terminal, then don't do anything
         if self.done:
-            return self._encode_auction(), 0., True, {'auction': self.auction, 'error': self.error}
+            return self._encode_auction(), 0., True, {}
 
-        if not self._act(action, 0):
-            # Automatic loss on illegal move
-            self.done = True
-            return self._encode_auction(), -1., True, {'auction': self.auction, 'error': self.error}
+        # act, ignore illegal moves (just do nothing if a move was illegal)
+        self._act(action, 0)
 
-        # All opponents play
+        # All opponents play. Assumes they never play invalid moves
         if not self.auction.state == AuctionState.DONE:
             for i, opponent in enumerate(self.opponents):
-                # Automatic loss on illegal move
-                if not self._act(opponent.act(self.auction, i+1), i+1):
-                    # Automatic loss on illegal move
-                    self.done = True
-                    return self._encode_auction(), -1., True, {'auction': self.auction, 'error': self.error}
+                self._act(opponent.act(self.auction, i+1), i+1)
 
-        self.auction.tick()
+        try:
+            self.auction.tick()
+        except InvalidActionError as err:
+            # invalid action means no nomination was done, so arbitrarily nominate a valid player for their value
+            for player in self.auction.undrafted_players:
+                if self.auction.owners[0].can_buy(player, 1):
+                    bid = min(max(player.value, 1), self.auction.owners[0].max_bid())
+                    self._act(FantasyFootballAuctionEnv.action_index(self.auction, self.auction.players.index(player),
+                                                                  max(1, bid)), 0)
+            self.error = err
 
         # Reward: if nonterminal, then the reward is 0
         if self.auction.state != AuctionState.DONE:
             self.done = False
-            return self._encode_auction(), 0., False, {'auction': self.auction, 'error': self.error}
+            return self._encode_auction(), 0., False, {}
         else:
             # We're in a terminal state. Reward is a gradient between -1 and 1 depending on standing
             self.done = True
@@ -277,4 +285,4 @@ class FantasyFootballAuctionEnv(gym.Env):
             my_score = scores[0]
             distance = (my_score - range[0]) / (range[1] - range[0])
             reward = ((distance * 2) - 1) ** 2
-            return self._encode_auction(), reward, True, {'auction': self.auction, 'error': self.error}
+            return self._encode_auction(), reward, True, {}
