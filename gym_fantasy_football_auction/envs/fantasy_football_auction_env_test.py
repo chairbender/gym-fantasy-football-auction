@@ -34,9 +34,9 @@ def test_with_seed(seed):
         while True:
             observation, reward, done, info = env.step(me.act(env.auction, 0))
             turncount += 1
+            if env.error is not None:
+                raise env.error
             if done:
-                if env.error is not None:
-                    raise env.error
                 break
     except Exception as err:
         print("On turn count " + str(turncount))
@@ -54,9 +54,9 @@ def test_gym_env_with_seed(env, seed):
         while True:
             observation, reward, done, info = env.step(me.act(env.auction, 0))
             turncount += 1
+            if env.error is not None:
+                raise env.error
             if done:
-                if env.error is not None:
-                    raise env.error
                 break
     except Exception as err:
         print("On turn count " + str(turncount))
