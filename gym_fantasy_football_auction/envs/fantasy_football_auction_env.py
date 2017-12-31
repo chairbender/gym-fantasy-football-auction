@@ -41,13 +41,15 @@ class FantasyFootballAuctionEnv(gym.Env):
             be weighted between starter and bench. If 1, for example, bench value will be ignored when calculating
             winners.
         """
+        # remove any players who cannot be drafted into any of the available slots
+        self.players = [player for player in players if any(slot.accepts(player) for slot in roster)]
+
         self.opponents = opponents
-        self.players = players
         self.money = money
         self.roster = roster
         self.starter_value = starter_value
 
-        self.auction = Auction(players, len(opponents)+1, money, roster)
+        self.auction = Auction(self.players, len(opponents)+1, money, roster)
         self.action_space = self._action_space()
         self.observation_space = self._observation_space()
         self.done = False
@@ -180,6 +182,7 @@ class FantasyFootballAuctionEnv(gym.Env):
         self.done = False
         for opponent in self.opponents:
             opponent.reset()
+        self.turn_count = 0
 
         return self._encode_auction()
 
@@ -203,6 +206,11 @@ class FantasyFootballAuctionEnv(gym.Env):
             return
         outfile = StringIO() if mode == 'ansi' else sys.stdout
         outfile.write(repr(self.auction) + '\n')
+        if self.error:
+            outfile.write('Most recent illegal move was: \n' + str(self.error) + '\n')
+        if self.done:
+            outfile.write('scores: ' + str(self.auction.scores(self.starter_value)) + '\n')
+        outfile.write('turn count: ' + str(self.turn_count) + '\n')
         return outfile
 
     def _act(self, action, owner_idx):
@@ -254,7 +262,7 @@ class FantasyFootballAuctionEnv(gym.Env):
         if self.done:
             return self._encode_auction(), 0., True, {}
 
-        # act, ignore illegal moves (just do nothing if a move was illegal)
+        # ignore illegal moves
         self._act(action, 0)
 
         # All opponents play. Assumes they never play invalid moves
@@ -265,8 +273,10 @@ class FantasyFootballAuctionEnv(gym.Env):
         try:
             self.auction.tick()
         except InvalidActionError as err:
-            # invalid action means no nomination was done, so arbitrarily nominate a valid player for their value
-            for player in self.auction.undrafted_players:
+            # invalid action means no nomination was done, so arbitrarily nominate a valid player for their value,
+            # starting with the least valuable player
+            undrafted_players = sorted(self.auction.undrafted_players, key=lambda player: player.value, reverse=True)
+            for player in undrafted_players:
                 if self.auction.owners[0].can_buy(player, 1):
                     bid = min(max(player.value, 1), self.auction.owners[0].max_bid())
                     self._act(FantasyFootballAuctionEnv.action_index(self.auction, self.auction.players.index(player),
@@ -280,9 +290,8 @@ class FantasyFootballAuctionEnv(gym.Env):
         else:
             # We're in a terminal state. Reward is a gradient between -1 and 1 depending on standing
             self.done = True
+            # reward player based on how far their score was from the top player
             scores = self.auction.scores(self.starter_value)
-            range = (min(scores), max(scores))
             my_score = scores[0]
-            distance = (my_score - range[0]) / (range[1] - range[0])
-            reward = ((distance * 2) - 1) ** 2
+            reward = (my_score / max(scores))
             return self._encode_auction(), reward, True, {}

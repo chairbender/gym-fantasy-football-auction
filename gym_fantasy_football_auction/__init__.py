@@ -9,6 +9,19 @@ PLAYERS_CSV_PATH = pkg_resources.resource_filename('gym_fantasy_football_auction
 players = players_from_fantasypros_cheatsheet(PLAYERS_CSV_PATH)
 
 register(
+    id='FantasyFootballAuction-2OwnerSingleRosterSimpleScriptedOpponent-v0',
+    entry_point='gym_fantasy_football_auction.envs:FantasyFootballAuctionEnv',
+    reward_threshold=1.0,
+
+    kwargs={
+        'opponents': [SimpleScriptedFantasyFootballAgent()],
+        'players': players, 'money': 200,
+        'roster': [RosterSlot.QB],
+        'starter_value': 1
+    }
+)
+
+register(
     id='FantasyFootballAuction-2OwnerSmallRosterSimpleScriptedOpponent-v0',
     entry_point='gym_fantasy_football_auction.envs:FantasyFootballAuctionEnv',
     reward_threshold=1.0,
@@ -17,7 +30,7 @@ register(
         'opponents': [SimpleScriptedFantasyFootballAgent()],
         'players': players, 'money': 200,
         'roster': [RosterSlot.QB, RosterSlot.WR, RosterSlot.RB],
-        'starter_value': .9
+        'starter_value': 1
     }
 )
 
@@ -32,7 +45,7 @@ register(
                       SimpleScriptedFantasyFootballAgent()],
         'players': players, 'money': 200,
         'roster': [RosterSlot.QB, RosterSlot.WR, RosterSlot.RB],
-        'starter_value': .9
+        'starter_value': 1
     }
 )
 
@@ -47,7 +60,7 @@ register(
                       SimpleScriptedFantasyFootballAgent()],
         'players': players, 'money': 200,
         'roster': [RosterSlot.QB, RosterSlot.WR, RosterSlot.RB, RosterSlot.TE, RosterSlot.WRRBTE],
-        'starter_value': .9
+        'starter_value': 1
     }
 )
 
@@ -64,7 +77,7 @@ register(
                       SimpleScriptedFantasyFootballAgent()],
         'players': players, 'money': 200,
         'roster': [RosterSlot.QB, RosterSlot.WR, RosterSlot.RB, RosterSlot.TE, RosterSlot.WRRBTE],
-        'starter_value': .9
+        'starter_value': 1
     }
 )
 
