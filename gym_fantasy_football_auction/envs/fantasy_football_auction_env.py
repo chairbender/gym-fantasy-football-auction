@@ -55,6 +55,7 @@ class FantasyFootballAuctionEnv(gym.Env):
         self.done = False
         self.error = None
         self.turn_count = 0
+        self.reward_range = (0, 1)
 
     @classmethod
     def action_index(cls, auction, player_index, bid):
@@ -288,10 +289,16 @@ class FantasyFootballAuctionEnv(gym.Env):
             self.done = False
             return self._encode_auction(), 0., False, {}
         else:
-            # We're in a terminal state. Reward is a gradient between -1 and 1 depending on standing
+            # We're in a terminal state. Reward is a gradient between 0 and 1 depending on standing
             self.done = True
             # reward player based on how far their score was from the top player
             scores = self.auction.scores(self.starter_value)
             my_score = scores[0]
             reward = (my_score / max(scores))
+            # reward is only 1 if they won, 0 otherwise
+            reward = 0.
+            if my_score == max(scores):
+                reward = 1.
+            else:
+                reward = 0.
             return self._encode_auction(), reward, True, {}

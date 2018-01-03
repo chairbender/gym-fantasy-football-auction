@@ -59,7 +59,7 @@ class SimpleScriptedFantasyFootballAgent(FantasyFootballAgent):
                     # nominate at some percentage of
                     # the real value, start at half
                     percent = random.uniform(0.8, 1.2)
-                    self.target = min(max(percent * player.value, 1), owner_me.max_bid())
+                    self.target = int(round(min(max(percent * player.value, 1), owner_me.max_bid())))
                     self.target_player = player
                     return FantasyFootballAuctionEnv.action_index(auction, auction.players.index(player),
                                                                   max(1, int(round(self.target / 2.0))))
@@ -67,7 +67,7 @@ class SimpleScriptedFantasyFootballAgent(FantasyFootballAgent):
             if self.target_player != auction.nominee and owner_me.can_buy(auction.nominee, 1):
                 # new target needs to be set if we can draft this player (for at least the min amount)
                 percent = random.uniform(0.8, 1.2)
-                self.target = percent * auction.nominee.value
+                self.target = int(round(percent * auction.nominee.value))
                 self.target_player = auction.nominee
 
             # walk up to the target if it is not yet exceeded, if we aren't the current winner,
