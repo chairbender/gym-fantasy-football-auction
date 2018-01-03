@@ -1,9 +1,22 @@
 # gym-fantasy-football-auction
 Gym environment for a fantasy football auction.
 
-This is mostly a project to get me to solidify what I've learned from my 
-recent coursework / self-education. So keep in mind that I'm a relative
-novice at these things and am still figuring them out at the moment.
+A fantasy football auction involves a set of owners and
+a list of draftable players. Each owner has certain slots
+on their roster that they must fill with players who play
+in certain positions. Owners take turns nominating a player.
+When a player is nominated, every tick, owners can submit bids
+which are higher than the current bid. This continues until
+nobody submits a new bid for a full tick. Play proceeds until
+all owners' rosters have been filled.
+
+For the purposes of this environment, we assume that every player
+has an agreed upon value (based upon projections, expert consensus, etc...).
+The winner of the auction is the player who ends with the highest total value,
+weighting bench slots lower than non-bench slots.
+
+The reward for this task is simply the agent's final score divided by the 
+score of the winning player.
 
 # Action Space
 
@@ -86,5 +99,7 @@ we have `n + p + 2` dimensions:
   * a value of 0 - `n-1` indicates that the owner with that index owns that player
   * a value of n indicates that the player is undrafted
   * a value of n+1 indicates that the player is the current nominee
+  
+You probably don't want to use this encoding directly. I used a Keras Embedding layer in order to come up with a more useful representation.
     
            
