@@ -11,6 +11,9 @@ from math import exp
 from six import StringIO
 
 
+
+
+
 class FantasyFootballAuctionEnv(gym.Env):
     """
     Fantasy football auction draft, with values for each draftable player pre-determined.
@@ -97,7 +100,7 @@ class FantasyFootballAuctionEnv(gym.Env):
          See README.md for details.
 
         This returns a multidiscrete with the following dimensions (in this order).
-
+        TODO: Update to use new one-hot encodings
         Say we have p draftable players, m starting money, and
         n owners in the game.
         We have these dimensions (in the order described):
@@ -116,22 +119,27 @@ class FantasyFootballAuctionEnv(gym.Env):
 
         :return: the observation space
         """
-        dimensions = []
-        # one per owner - max bid
-        for i in range(len(self.opponents)+1):
-            dimensions.append([0, self.money])
-
-        # bid to beat
-        dimensions.append([0, self.money])
-        # winning bidder
-        dimensions.append([0, len(self.opponents)])
-
-        # player status, one per player
-        for i in range(len(self.players)):
-            dimensions.append([0, len(self.opponents)+1])
-
+        dimensions = [
+            # one per owner - max bid 2
+            *[[0, self.money] for _ in range(len(self.opponents)+1)],
+            # bid to beat for current nominee +1 = 3
+            [0, self.money],
+            # winning bidder (1 binary per owner) +2 = 5
+            *[[0, 1] for _ in range(len(self.opponents)+1)],
+            # player ownership status, 1 binary for each owner for each player +24=29
+            *[[0, 1] for _ in range((len(self.opponents)+1)*len(self.players))],
+            # player nomination status (1 binary per player) +2=31
+            *[[0, 1] for _ in range(len(self.players))]
+        ]
         return spaces.MultiDiscrete(dimensions)
 
+    def _encode_status(self, player):
+        """
+
+        :param Player player:
+        :return:
+        """
+        pass
     def _encode_auction(self):
         """
 
@@ -151,34 +159,21 @@ class FantasyFootballAuctionEnv(gym.Env):
         :return: the observation space of the current auction
         """
 
-        observation = []
-
-        # one per owner - max bid
-        for owner in self.auction.owners:
-            observation.append(owner.max_bid())
-
-        # bid to beat
-        if self.auction.bid is None:
-            observation.append(0)
-        else:
-            observation.append(self.auction.bid)
-
-        # winning bidder
-        if self.auction.winning_owner_index() == -1:
-            observation.append(0)
-        else:
-            observation.append(self.auction.winning_owner_index())
-
-        # player status, one per player
-        for i, player in enumerate(self.auction.players):
-            owner_idx = self.auction.owner_index_of_player(i)
-            if owner_idx != -1:
-                observation.append(owner_idx)
-            else:
-                if player == self.auction.nominee:
-                    observation.append(len(self.auction.owners) + 1)
-                else:
-                    observation.append(len(self.auction.owners))
+        observation = [
+            # one per owner - max bid
+            *[owner.max_bid() for owner in self.auction.owners],
+            # bid to beat for current nominee
+            0 if self.auction.bid is None else self.auction.bid,
+            # winning bidder (1 binary per owner)
+            *[1 if i == self.auction.winning_owner_index() else 0 for i in range(len(self.opponents)+1)],
+            # player ownership status, 1 binary for each owner for each player
+            *[
+                1 if self.auction.owner_index_of_player(player_idx) == owner_idx else 0 for player_idx in
+                range(len(self.auction.players)) for owner_idx in range(len(self.auction.owners))
+            ],
+            # player nomination status (1 binary per player)
+            *[1 if player == self.auction.nominee else 0 for player in self.auction.players]
+        ]
 
         return observation
 
@@ -301,4 +296,13 @@ class FantasyFootballAuctionEnv(gym.Env):
             my_score = scores[0]
             self.final_reward = (my_score / max(scores))
             return self._encode_auction(), self.final_reward, True, {}
+
+    # 3 options for reward function
+    # 1 - reward at end of game based on ratio of my_score / max(scores). 0 during game
+    # 2 - reward at end of game - 1 for victory. 0 otherwise.
+    # 3 - reward with player_value every time player is acquired.
+    # 3.1 like 1, but reward -1 during game.
+    # 3.2 like 2, but reward -1 during game.
+
+
 
