@@ -2,9 +2,11 @@
 This defines the fantasy football task environment.
 
 """
+from functools import reduce
 
 import gym
 import sys
+
 from gym import spaces
 from fantasy_football_auction.auction import Auction, AuctionState, InvalidActionError
 from math import exp
@@ -34,10 +36,27 @@ class FantasyFootballAuctionEnv(gym.Env):
         :ivar spaces.MultiDiscrete observation_space: observation space for this env
         :ivar tuple(float,float) reward_range: range of the reward (0,1)
         :ivar float final_reward: reward for the game to the agent. zero until the game ends.
+        :ivar str reward_function: option for which reward function to use. Possible values are:
+            1 - reward at end of game based on ratio of my_score / max(scores). 0 during game
+            2 - reward at end of game - 1 for victory. 0 otherwise.
+            3 - reward with player_value every time player is acquired, punish with player_value every time
+                   another owner gets a player (make sure to consider bench in value calculation). 0 otherwise.
+            #.1 where # is 1-3 - same as 1-3 but we punish the agent with -1 and terminal state on illegal move.
+                However, for 1.3, since we need to overcome the punishment of opponents drafting other players,
+                we set the punishment to the max player value*number of slots*number of opponents. This ensures
+                that the total cumulative punishment will never exceed the possible punishment incurred during the
+                game (which would encourage the agent to commit illegal moves to end the game instantly)
+            I considered having -1 when nothing is gained/lost rather than 0, but it doesn't really make
+                sense for FF. There's not really anything wrong with taking awhile. The game will progress
+                at a certain rate regardless of the agent's behavior. There's not really a way to stall.
+            Also considered constantly rewarding with the player's team value*3 - opponent's team value.
+                But this doesn't really make sense in fantasy - this would mean the agent wants to prevent
+                    lots of bidding wars when they are currently behind. But there's nothing wrong with being
+                    behind and letting other players waste money on outbidding each other.
     """
     metadata = {"render.modes": ["human", "ansi"]}
 
-    def __init__(self, opponents, players, money, roster, starter_value):
+    def __init__(self, opponents, players, money, roster, starter_value, reward_function='3.1'):
         """
         :param list(FantasyFootballAgent) opponents: the other opponents in this game
         :param list(Player) players: list of fantasy football auction Players that will be drafted
@@ -46,6 +65,16 @@ class FantasyFootballAuctionEnv(gym.Env):
         :param starter_value: floating point between 0 and 1 inclusive indicating how heavily the final score should
             be weighted between starter and bench. If 1, for example, bench value will be ignored when calculating
             winners.
+        :param str reward_function: optional. option for which reward function to use. Possible values are:
+            1 - reward at end of game based on ratio of my_score / max(scores). 0 during game
+            2 - reward at end of game - 1 for victory. 0 otherwise.
+            3 - reward with player_value every time player is acquired, punish with player_value every time
+                   another owner gets a player (make sure to consider bench in value calculation). 0 otherwise.
+            #.1 where # is 1-3 - same as 1-3 but we punish the agent with -1 and terminal state on illegal move.
+                However, for 1.3, since we need to overcome the punishment of opponents drafting other players,
+                we set the punishment to the max player value*number of slots*number of opponents. This ensures
+                that the total cumulative punishment will never exceed the possible punishment incurred during the
+                game (which would encourage the agent to commit illegal moves to end the game instantly)
         """
         # remove any players who cannot be drafted into any of the available slots
         self.players = [player for player in players if any(slot.accepts(player) for slot in roster)]
@@ -61,8 +90,25 @@ class FantasyFootballAuctionEnv(gym.Env):
         self.done = False
         self.error = None
         self.turn_count = 0
-        self.reward_range = (0, 1)
-        self.final_reward = 0
+        # NOTE: not sure if reward range means the max/min possible total reward for an episode or
+        # for a step. Assuming its for the step.
+        if reward_function.endswith(".1"):
+            if reward_function.startswith("3"):
+                highest_player_value = max(player.value for player in self.players)
+                self.reward_range = (-(highest_player_value * len(self.roster) * len(self.opponents)), highest_player_value)
+            else:
+                self.reward_range = (-1, 1)
+        else:
+            if reward_function.startswith("3"):
+                highest_player_value = max(player.value for player in self.players)
+                self.reward_range = (-highest_player_value, highest_player_value)
+            else:
+                self.reward_range = (0,1)
+        self.reward_function = reward_function
+        self._previous_values = [0] * (len(self.opponents)+1)
+        # we save the binary encodings of each player's owner in here because it's expensive to compute each step
+        # there's one binary value per player per owner (1 indicating that owner owns that player)
+        self._encoded_players_ownership = [0] * (len(self.opponents)+1) * len(self.players)
 
     @classmethod
     def action_index(cls, auction, player_index, bid):
@@ -100,20 +146,11 @@ class FantasyFootballAuctionEnv(gym.Env):
          See README.md for details.
 
         This returns a multidiscrete with the following dimensions (in this order).
-        TODO: Update to use new one-hot encodings
-        Say we have p draftable players, m starting money, and
-        n owners in the game.
-        We have these dimensions (in the order described):
-        n dimensions in the range (0 - m): the current max bid for each owner
-        1 dimension in the range (0 - m): the current bid to beat for the current nominee
-        1 dimension in the range (0 - n): the index of the owner who has the current bid to beat
-            for the current nominee
-        p dimensions in the range (0 - n+1):
-          * each dimension represents a draftable player's 'state'
-          * a value of 0 - n-1 indicates that the owner with that index owns that player
-          * a value of n indicates that the player is undrafted
-          * a value of n+1 indicates that the player is the current nominee
-
+        # one dimension per owner, representing their current maximum bid.
+        # the bid to beat for the current nominee
+        # 1 binary dimension per owner representing the current bid winner
+        # 1 binary for each owner for each player, representing who owns the player
+        # player nomination status (1 binary per player)
         Each of these is represented in a multidiscrete with the dimensions in the order
         specified above.
 
@@ -143,18 +180,7 @@ class FantasyFootballAuctionEnv(gym.Env):
     def _encode_auction(self):
         """
 
-        Array with the value of each dimension:
-
-        We have these dimensions (in the order described):
-        n dimensions in the range (0 - m): the current max bid for each owner
-        1 dimension in the range (0 - m): the current bid to beat for the current nominee
-        1 dimension in the range (0 - n): the index of the owner who has the current bid to beat
-            for the current nominee
-        p dimensions in the range (0 - n+1):
-          * each dimension represents a draftable player's 'state'
-          * a value of 0 - n-1 indicates that the owner with that index owns that player
-          * a value of n indicates that the player is undrafted
-          * a value of n+1 indicates that the player is the current nominee
+        Array with the value of each dimension (see observation_space comments)
 
         :return: the observation space of the current auction
         """
@@ -167,10 +193,8 @@ class FantasyFootballAuctionEnv(gym.Env):
             # winning bidder (1 binary per owner)
             *[1 if i == self.auction.winning_owner_index() else 0 for i in range(len(self.opponents)+1)],
             # player ownership status, 1 binary for each owner for each player
-            *[
-                1 if self.auction.owner_index_of_player(player_idx) == owner_idx else 0 for player_idx in
-                range(len(self.auction.players)) for owner_idx in range(len(self.auction.owners))
-            ],
+            # this is slow and should be stored in memory rather than calculated each step
+            *self._encoded_players_ownership,
             # player nomination status (1 binary per player)
             *[1 if player == self.auction.nominee else 0 for player in self.auction.players]
         ]
@@ -183,7 +207,7 @@ class FantasyFootballAuctionEnv(gym.Env):
         for opponent in self.opponents:
             opponent.reset()
         self.turn_count = 0
-        self.final_reward = 0
+        self.error = None
 
         return self._encode_auction()
 
@@ -261,10 +285,13 @@ class FantasyFootballAuctionEnv(gym.Env):
 
         # If already terminal, then don't do anything (but we can return the reward)
         if self.done:
-            return self._encode_auction(), self.final_reward, True, {}
+            return self._encode_auction(), self._calculate_reward(), True, {}
 
-        # ignore illegal moves
         self._act(action, 0)
+        if self.error is not None and self.reward_function.endswith(".1"):
+            # terminal and punish on illegal move if using a .1 reward function
+            return self._encode_auction(), self._calculate_reward(), True, {}
+
 
         # All opponents play. Assumes they never play invalid moves
         if not self.auction.state == AuctionState.DONE:
@@ -272,37 +299,78 @@ class FantasyFootballAuctionEnv(gym.Env):
                 self._act(opponent.act(self.auction, i+1), i+1)
 
         try:
+            # during bid, tick and check if a buy was completed so we can update the player ownership list
+            nominee_index = None
+            winning_index = None
+            if self.auction.state == AuctionState.BID:
+                nominee_index = self.auction.nominee_index()
+                winning_index = self.auction.winning_owner_index()
             self.auction.tick()
+            if self.auction.state != AuctionState.BID and nominee_index is not None:
+                # state changed, so a buy was completed. Change ownership in the owner array
+                self._encoded_players_ownership[nominee_index*(len(self.opponents)+1) + winning_index] = 1
         except InvalidActionError as err:
-            # invalid action means no nomination was done, so arbitrarily nominate a valid player for their value,
-            # starting with the least valuable player
-            undrafted_players = sorted(self.auction.undrafted_players, key=lambda player: player.value, reverse=True)
-            for player in undrafted_players:
-                if self.auction.owners[0].can_buy(player, 1):
-                    bid = min(max(player.value, 1), self.auction.owners[0].max_bid())
-                    self._act(FantasyFootballAuctionEnv.action_index(self.auction, self.auction.players.index(player),
-                                                                  max(1, bid)), 0)
-            self.error = err
+            # terminal and punish on illegal move if using a .1 reward function
+            if self.reward_function.endswith(".1"):
+                self.error = err
+                return self._encode_auction(), self._calculate_reward(), True, {}
+            else:
+                # invalid action means no nomination was done, so arbitrarily nominate a valid player for their value,
+                # starting with the least valuable player
+                undrafted_players = sorted(self.auction.undrafted_players, key=lambda player: player.value, reverse=True)
+                for player in undrafted_players:
+                    if self.auction.owners[0].can_buy(player, 1):
+                        bid = min(max(player.value, 1), self.auction.owners[0].max_bid())
+                        self._act(FantasyFootballAuctionEnv.action_index(self.auction, self.auction.players.index(player),
+                                                                      max(1, bid)), 0)
+                self.error = err
 
-        # Reward: if nonterminal, then the reward is 0
-        if self.auction.state != AuctionState.DONE:
-            self.done = False
-            return self._encode_auction(), 0., False, {}
-        else:
-            # We're in a terminal state. Reward is a gradient between 0 and 1 depending on standing
+        # check if done
+        if self.auction.state == AuctionState.DONE:
             self.done = True
-            # reward player based on how far their score was from the top player
+        return self._encode_auction(), self._calculate_reward(), self.done, {}
+
+    def is_winner(self):
+        """
+
+        :return boolean: true iff this episode is done and the agent won
+        """
+        if self.done:
             scores = self.auction.scores(self.starter_value)
             my_score = scores[0]
-            self.final_reward = (my_score / max(scores))
-            return self._encode_auction(), self.final_reward, True, {}
+            return my_score == max(scores)
+        return False
 
-    # 3 options for reward function
-    # 1 - reward at end of game based on ratio of my_score / max(scores). 0 during game
-    # 2 - reward at end of game - 1 for victory. 0 otherwise.
-    # 3 - reward with player_value every time player is acquired.
-    # 3.1 like 1, but reward -1 during game.
-    # 3.2 like 2, but reward -1 during game.
+    def _calculate_reward(self):
+        if self.reward_function.endswith(".1") and self.error is not None:
+            # punish on error
+            if self.reward_function.startswith("3"):
+                # find highest value player and punish based on it * roster slots * opponents
+                highest_player_value = max(player.value for player in self.players)
+                return -(highest_player_value * len(self.roster) * len(self.opponents))
+            else:
+                return -1
+        if self.reward_function.startswith("1"):
+            if self.done:
+                scores = self.auction.scores(self.starter_value)
+                my_score = scores[0]
+                return my_score / max(scores)
+            else:
+                return 0.
+        elif self.reward_function.startswith("2"):
+            if self.done:
+                scores = self.auction.scores(self.starter_value)
+                my_score = scores[0]
+                return 1 if my_score == max(scores) else 0
+            else:
+                return 0.
+        elif self.reward_function.startswith("3"):
+            # calculate delta in score for this step
+            new_values = self.auction.scores(self.starter_value)
+            deltas = [new_values[i] - self._previous_values[i] if i == 0 else self._previous_values[i] - new_values[i]
+                      for i in range(len(new_values))]
+            self._previous_values = new_values
+            return reduce(lambda x, y: x + y, deltas)
 
 
 

@@ -37,8 +37,8 @@ def test_with_seed(seed):
             observation, reward, done, info = env.step(me.act(env.auction, 0))
             turncount += 1
             if done:
-                if info['error'] is not None:
-                    raise info['error']
+                if env.error is not None:
+                    raise env.error
                 break
     except Exception as err:
         print("Error on turn count " + str(turncount))
