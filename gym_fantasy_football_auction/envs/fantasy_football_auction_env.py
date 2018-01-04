@@ -25,9 +25,12 @@ class FantasyFootballAuctionEnv(gym.Env):
         :ivar list(RosterSlot) roster: the roster each owner must fill. Read only.
         :ivar float starter_value: the weighting of the start vs the bench during scoring. Read only.
         :ivar boolean done: Whether the current match is done. Read only.
+        :ivar int turn_count: number of turns that have transpired for a given game
         :ivar Error error: if any error happened internally in the auction, it is stored here. Read only.
         :ivar spaces.MultiDiscrete action_space: action space for this env
         :ivar spaces.MultiDiscrete observation_space: observation space for this env
+        :ivar tuple(float,float) reward_range: range of the reward (0,1)
+        :ivar float final_reward: reward for the game to the agent. zero until the game ends.
     """
     metadata = {"render.modes": ["human", "ansi"]}
 
@@ -56,6 +59,7 @@ class FantasyFootballAuctionEnv(gym.Env):
         self.error = None
         self.turn_count = 0
         self.reward_range = (0, 1)
+        self.final_reward = 0
 
     @classmethod
     def action_index(cls, auction, player_index, bid):
@@ -184,6 +188,7 @@ class FantasyFootballAuctionEnv(gym.Env):
         for opponent in self.opponents:
             opponent.reset()
         self.turn_count = 0
+        self.final_reward = 0
 
         return self._encode_auction()
 
@@ -259,9 +264,9 @@ class FantasyFootballAuctionEnv(gym.Env):
 
         self.turn_count += 1
 
-        # If already terminal, then don't do anything
+        # If already terminal, then don't do anything (but we can return the reward)
         if self.done:
-            return self._encode_auction(), 0., True, {}
+            return self._encode_auction(), self.final_reward, True, {}
 
         # ignore illegal moves
         self._act(action, 0)
@@ -294,11 +299,6 @@ class FantasyFootballAuctionEnv(gym.Env):
             # reward player based on how far their score was from the top player
             scores = self.auction.scores(self.starter_value)
             my_score = scores[0]
-            reward = (my_score / max(scores))
-            # reward is only 1 if they won, 0 otherwise
-            reward = 0.
-            if my_score == max(scores):
-                reward = 1.
-            else:
-                reward = 0.
-            return self._encode_auction(), reward, True, {}
+            self.final_reward = (my_score / max(scores))
+            return self._encode_auction(), self.final_reward, True, {}
+
