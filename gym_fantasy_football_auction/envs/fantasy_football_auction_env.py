@@ -7,6 +7,7 @@ from functools import reduce
 import gym
 import sys
 
+from fantasy_football_auction.position import Position
 from gym import spaces
 from fantasy_football_auction.auction import Auction, AuctionState, InvalidActionError
 from math import exp
@@ -36,23 +37,7 @@ class FantasyFootballAuctionEnv(gym.Env):
         :ivar spaces.MultiDiscrete observation_space: observation space for this env
         :ivar tuple(float,float) reward_range: range of the reward (0,1)
         :ivar float final_reward: reward for the game to the agent. zero until the game ends.
-        :ivar str reward_function: option for which reward function to use. Possible values are:
-            1 - reward at end of game based on ratio of my_score / max(scores). 0 during game
-            2 - reward at end of game - 1 for victory. 0 otherwise.
-            3 - reward with player_value every time player is acquired, punish with player_value every time
-                   another owner gets a player (make sure to consider bench in value calculation). 0 otherwise.
-            #.1 where # is 1-3 - same as 1-3 but we punish the agent with -1 and terminal state on illegal move.
-                However, for 1.3, since we need to overcome the punishment of opponents drafting other players,
-                we set the punishment to the max player value*number of slots*number of opponents. This ensures
-                that the total cumulative punishment will never exceed the possible punishment incurred during the
-                game (which would encourage the agent to commit illegal moves to end the game instantly)
-            I considered having -1 when nothing is gained/lost rather than 0, but it doesn't really make
-                sense for FF. There's not really anything wrong with taking awhile. The game will progress
-                at a certain rate regardless of the agent's behavior. There's not really a way to stall.
-            Also considered constantly rewarding with the player's team value*3 - opponent's team value.
-                But this doesn't really make sense in fantasy - this would mean the agent wants to prevent
-                    lots of bidding wars when they are currently behind. But there's nothing wrong with being
-                    behind and letting other players waste money on outbidding each other.
+        :ivar str reward_function: see __init__'s reward_function documentation
     """
     metadata = {"render.modes": ["human", "ansi"]}
 
@@ -67,7 +52,7 @@ class FantasyFootballAuctionEnv(gym.Env):
             winners.
         :param str reward_function: optional. option for which reward function to use. Possible values are:
             1 - reward at end of game based on ratio of my_score / max(scores). 0 during game
-            2 - reward at end of game - 1 for victory. 0 otherwise.
+            2 - reward at end of game - 1 for victory, -1 for loss. 0 otherwise.
             3 - reward with player_value every time player is acquired, punish with player_value every time
                    another owner gets a player (make sure to consider bench in value calculation). 0 otherwise.
             #.1 where # is 1-3 - same as 1-3 but we punish the agent with -1 and terminal state on illegal move.
@@ -75,6 +60,8 @@ class FantasyFootballAuctionEnv(gym.Env):
                 we set the punishment to the max player value*number of slots*number of opponents. This ensures
                 that the total cumulative punishment will never exceed the possible punishment incurred during the
                 game (which would encourage the agent to commit illegal moves to end the game instantly)
+            #.2 where # is 1-2 - same as 1.1 and 1.2 but we don't count the rule violation as a terminal state.
+                Instead, we just keep playing and let the game make a default, bad choice.
         """
         # remove any players who cannot be drafted into any of the available slots
         self.players = [player for player in players if any(slot.accepts(player) for slot in roster)]
@@ -92,7 +79,7 @@ class FantasyFootballAuctionEnv(gym.Env):
         self.turn_count = 0
         # NOTE: not sure if reward range means the max/min possible total reward for an episode or
         # for a step. Assuming its for the step.
-        if reward_function.endswith(".1"):
+        if reward_function.endswith(".1") or reward_function.endswith(".2"):
             if reward_function.startswith("3"):
                 highest_player_value = max(player.value for player in self.players)
                 self.reward_range = (-(highest_player_value * len(self.roster) * len(self.opponents)), highest_player_value)
@@ -103,13 +90,20 @@ class FantasyFootballAuctionEnv(gym.Env):
                 highest_player_value = max(player.value for player in self.players)
                 self.reward_range = (-highest_player_value, highest_player_value)
             else:
-                self.reward_range = (0,1)
+                self.reward_range = (-1 if reward_function.startswith("2") else 0, 1)
         self.reward_function = reward_function
         self._previous_values = [0] * (len(self.opponents)+1)
         # we save the binary encodings of each player's owner in here because it's expensive to compute each step
         # there's one binary value per player per owner (1 indicating that owner owns that player)
-        self._encoded_players_ownership = [0] * (len(self.opponents)+1) * len(self.players)
+        # this array is [num_owners x num_players], i.e. it can be indexed by
+        # [owner_idx][player_idx]
+        self._encoded_players_ownership = [[0] * len(self.players)] * (len(self.opponents)+1)
 
+        # similar - stores whether a player is draftable by an owner.
+        # indexed by [owner_idx][player_idx]
+        self._encoded_players_draftability = *[[1 if owner.can_buy(player, 1) else 0
+                                                for player_idx, player in enumerate(self.players)]
+                                               for owner_idx, owner in enumerate(self.auction.owners)],
     @classmethod
     def action_index(cls, auction, player_index, bid):
         """
@@ -145,30 +139,48 @@ class FantasyFootballAuctionEnv(gym.Env):
         """
          See README.md for details.
 
-        This returns a multidiscrete with the following dimensions (in this order).
-        # one dimension per owner, representing their current maximum bid.
-        # the bid to beat for the current nominee
-        # 1 binary dimension per owner representing the current bid winner
-        # 1 binary for each owner for each player, representing who owns the player
-        # player nomination status (1 binary per player)
-        Each of these is represented in a multidiscrete with the dimensions in the order
-        specified above.
 
-        :return: the observation space
+        :return spaces.Tuple: the observation space. A tuple of MultiDiscretes, each
+        MultiDiscrete having 200 either binary or integer dimensions.
         """
-        dimensions = [
-            # one per owner - max bid 2
-            *[[0, self.money] for _ in range(len(self.opponents)+1)],
-            # bid to beat for current nominee +1 = 3
-            [0, self.money],
-            # winning bidder (1 binary per owner) +2 = 5
-            *[[0, 1] for _ in range(len(self.opponents)+1)],
-            # player ownership status, 1 binary for each owner for each player +24=29
-            *[[0, 1] for _ in range((len(self.opponents)+1)*len(self.players))],
-            # player nomination status (1 binary per player) +2=31
-            *[[0, 1] for _ in range(len(self.players))]
-        ]
-        return spaces.MultiDiscrete(dimensions)
+        num_players = len(self.players)
+        num_owners = len(self.opponents)+1
+        dimensions = []
+
+        # one per owner - indicating ownership
+        for _ in range(num_owners):
+            dimensions.append(spaces.MultiDiscrete([[0, 1]] * num_players))
+        # one per owner - indicating bid value for the player
+        for _ in range(num_owners):
+            dimensions.append(spaces.MultiDiscrete([[0, self.money]] * num_players))
+        # one per owner - indicating max bid
+        for _ in range(num_owners):
+            dimensions.append(spaces.MultiDiscrete([[0, self.money]] * num_players))
+        # one per owner - indicating whether player is draftable by the owner
+        for _ in range(num_owners):
+            dimensions.append(spaces.MultiDiscrete([[0, 1]] * num_players))
+        # one - set to 1 for all players if it is owner 0's turn to nominate
+        dimensions.append(spaces.MultiDiscrete([[0, 1]] * num_players))
+
+        # fixed layers
+        # ECT value of player
+        dimensions.append(spaces.MultiDiscrete([[0, self.money]] * num_players))
+        # one layer, binary, per possible position, in this order
+        # QB = 0
+        # RB = 1
+        # WR = 2
+        # TE = 3
+        # DST = 4
+        # K = 5
+        # LB = 6
+        # DE = 7
+        # DT = 8
+        # CB = 9
+        # S = 10
+        for i in range(11):
+            dimensions.append(spaces.MultiDiscrete([[0, 1]] * num_players))
+
+        return spaces.Tuple(dimensions)
 
     def _encode_status(self, player):
         """
@@ -177,6 +189,7 @@ class FantasyFootballAuctionEnv(gym.Env):
         :return:
         """
         pass
+
     def _encode_auction(self):
         """
 
@@ -184,19 +197,30 @@ class FantasyFootballAuctionEnv(gym.Env):
 
         :return: the observation space of the current auction
         """
+        num_players = len(self.players)
+        num_owners = len(self.opponents) + 1
 
         observation = [
-            # one per owner - max bid
-            *[owner.max_bid() for owner in self.auction.owners],
-            # bid to beat for current nominee
-            0 if self.auction.bid is None else self.auction.bid,
-            # winning bidder (1 binary per owner)
-            *[1 if i == self.auction.winning_owner_index() else 0 for i in range(len(self.opponents)+1)],
-            # player ownership status, 1 binary for each owner for each player
+            # one per owner - indicting ownership
             # this is slow and should be stored in memory rather than calculated each step
             *self._encoded_players_ownership,
-            # player nomination status (1 binary per player)
-            *[1 if player == self.auction.nominee else 0 for player in self.auction.players]
+            # one per owner per player, bid values for the player (only nonzero for current
+            # nominee)
+            *[[0 if player_idx == self.auction.nominee_index() else self.auction.bids[owner_idx]
+                for player_idx in range(num_players)]
+                for owner_idx in range(num_owners)],
+            # one per owner per player, max bid value (regardless of player)
+            *[[owner.max_bid()] * num_players
+              for owner in self.auction.owners],
+            # one per owner per player - draftability
+            # this is slow and should be stored in memory rather than calculated each step
+            *self._encoded_players_draftability,
+            # one binary layer - all ones if it is nomination time for owner 0 (the agent)
+            [1 if self.auction.state == AuctionState.NOMINATE and self.auction.nominee_index() == 0 else 0] * num_players,
+            # fixed input layer - player value
+            [player.value for player in self.players],
+            # fixed input layer - binary - one per possible position - player position.
+            *[[player.position == position for player in self.players] for position in Position]
         ]
 
         return observation
@@ -308,7 +332,16 @@ class FantasyFootballAuctionEnv(gym.Env):
             self.auction.tick()
             if self.auction.state != AuctionState.BID and nominee_index is not None:
                 # state changed, so a buy was completed. Change ownership in the owner array
-                self._encoded_players_ownership[nominee_index*(len(self.opponents)+1) + winning_index] = 1
+                self._encoded_players_ownership[winning_index][nominee_index] = 1
+                # change the status of draftability for the purchased player
+                for owner_idx in range(len(self.auction.owners)):
+                    self._encoded_players_draftability[owner_idx][nominee_index] = 0
+                # recalculate draftability for the winning owner
+                for player_idx, player in enumerate(self.auction.players):
+                    # can draft if it can buy and player is unowned
+                    self._encoded_players_draftability[winning_index][player_idx] = \
+                        1 if self.auction.owners[winning_index].can_buy(player, 1) \
+                        and self.auction.owner_index_of_player(player_idx) == -1 else 0
         except InvalidActionError as err:
             # terminal and punish on illegal move if using a .1 reward function
             if self.reward_function.endswith(".1"):
@@ -342,7 +375,7 @@ class FantasyFootballAuctionEnv(gym.Env):
         return False
 
     def _calculate_reward(self):
-        if self.reward_function.endswith(".1") and self.error is not None:
+        if (self.reward_function.endswith(".1") or self.reward_function.endswith(".2")) and self.error is not None:
             # punish on error
             if self.reward_function.startswith("3"):
                 # find highest value player and punish based on it * roster slots * opponents
@@ -361,7 +394,7 @@ class FantasyFootballAuctionEnv(gym.Env):
             if self.done:
                 scores = self.auction.scores(self.starter_value)
                 my_score = scores[0]
-                return 1 if my_score == max(scores) else 0
+                return 1 if my_score == max(scores) else -1
             else:
                 return 0.
         elif self.reward_function.startswith("3"):
