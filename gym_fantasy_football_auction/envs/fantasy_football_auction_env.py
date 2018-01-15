@@ -76,6 +76,9 @@ class FantasyFootballAuctionEnv(gym.Env):
         # save this so it doesn't need to be recalculated
         self._max_bid_overall = FantasyFootballAuctionEnv.max_bid_overall(self.auction)
         self.action_space = self._action_space()
+        # represents the action legality for doing nothing - only legal action is 0 bid for player 0
+        self._do_nothing = [0] * self.action_space.n
+        self._do_nothing[0] = 1
         self.observation_space = self._observation_space()
         self.done = False
         self.error = None
@@ -89,7 +92,7 @@ class FantasyFootballAuctionEnv(gym.Env):
             else:
                 self.reward_range = (-1, 1)
         else:
-            if reward_function.startswith("3"):
+            if reward_function.startswith("3") or reward_function.startswith("4"):
                 highest_player_value = max(player.value for player in self.players)
                 self.reward_range = (-highest_player_value, highest_player_value)
             else:
@@ -104,12 +107,10 @@ class FantasyFootballAuctionEnv(gym.Env):
 
         # similar - stores whether a player is draftable by an owner.
         # indexed by [owner_idx][player_idx]
-        self._encoded_players_draftability = *[[1 if owner.can_buy(player, 1) else 0
-                                                for player_idx, player in enumerate(self.players)]
-                                               for owner_idx, owner in enumerate(self.auction.owners)],
-        # represents the action legality for doing nothing - only legal action is 0 bid for player 0
-        self._do_nothing = [0] * self.action_space.n
-        self._do_nothing[0] = 1
+        self._encoded_players_draftability = [[1 if owner.can_buy(player, 1) else 0
+                                               for player_idx, player in enumerate(self.players)]
+                                               for owner_idx, owner in enumerate(self.auction.owners)]
+
 
     @classmethod
     def action_index(cls, auction, player_index, bid):
@@ -253,6 +254,12 @@ class FantasyFootballAuctionEnv(gym.Env):
         self.turn_count = 0
         self.error = None
 
+        self._previous_values = [0] * (len(self.opponents) + 1)
+        self._encoded_players_ownership = np.array([[0] * len(self.players)] * (len(self.opponents) + 1))
+        self._encoded_players_draftability = [[1 if owner.can_buy(player, 1) else 0
+                                               for player_idx, player in enumerate(self.players)]
+                                              for owner_idx, owner in enumerate(self.auction.owners)]
+
         return self._encode_auction()
 
     def _close(self):
@@ -307,13 +314,15 @@ class FantasyFootballAuctionEnv(gym.Env):
         else:
             # it is bidding time. Legal actions are to submit a bid for the player who is currently up
             # for nomination, where the bid is greater than the current bid to beat but
-            # less than the agent's maximum bid, only if the player is draftable
-            min_bid = max(self.auction.bids) + 1
+            # less than the agent's maximum bid, only if the player is draftable. Also legal
+            # to submit no bid
+            min_bid = self.auction.bid + 1
             if self.auction.owners[0].can_buy(self.auction.nominee, min_bid):
                 # can still bid on that player for any amount between max bid and current bid to beat
                 max_bid = self.auction.owners[0].max_bid()
                 return [1 if self.auction.nominee_index() == self.player_index_of_action(action_idx) and
-                        max_bid >= self.bid_of_action(action_idx) >= min_bid
+                        (max_bid >= self.bid_of_action(action_idx) >= min_bid or
+                        self.bid_of_action(action_idx) == 0)
                         else 0
                         for action_idx in range(self.action_space.n)]
             else:
@@ -486,6 +495,20 @@ class FantasyFootballAuctionEnv(gym.Env):
                       for i in range(len(new_values))]
             self._previous_values = new_values
             return reduce(lambda x, y: x + y, deltas)
+        elif self.reward_function.startswith("4"):
+            # calculate delta in score for this step
+            new_values = self.auction.scores(self.starter_value)
+            deltas = [new_values[i] - self._previous_values[i] if i == 0 else self._previous_values[i] - new_values[i]
+                      for i in range(len(new_values))]
+            self._previous_values = new_values
+            # if the agent won bid, reduce reward based on spending
+            # if the agent lost bid, increase reward based on opponent spending
+            if deltas[0] > 0:
+                return reduce(lambda x, y: x + y, deltas) - self.auction.bid
+            else:
+                return reduce(lambda x, y: x + y, deltas) + self.auction.bid
+
+
 
 
 
