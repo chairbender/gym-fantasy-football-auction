@@ -6,6 +6,7 @@ from functools import reduce
 
 import gym
 import sys
+import numpy as np
 
 from fantasy_football_auction.position import Position
 from gym import spaces
@@ -72,6 +73,8 @@ class FantasyFootballAuctionEnv(gym.Env):
         self.starter_value = starter_value
 
         self.auction = Auction(self.players, len(opponents)+1, money, roster)
+        # save this so it doesn't need to be recalculated
+        self._max_bid_overall = FantasyFootballAuctionEnv.max_bid_overall(self.auction)
         self.action_space = self._action_space()
         self.observation_space = self._observation_space()
         self.done = False
@@ -97,13 +100,17 @@ class FantasyFootballAuctionEnv(gym.Env):
         # there's one binary value per player per owner (1 indicating that owner owns that player)
         # this array is [num_owners x num_players], i.e. it can be indexed by
         # [owner_idx][player_idx]
-        self._encoded_players_ownership = [[0] * len(self.players)] * (len(self.opponents)+1)
+        self._encoded_players_ownership = np.array([[0] * len(self.players)] * (len(self.opponents)+1))
 
         # similar - stores whether a player is draftable by an owner.
         # indexed by [owner_idx][player_idx]
         self._encoded_players_draftability = *[[1 if owner.can_buy(player, 1) else 0
                                                 for player_idx, player in enumerate(self.players)]
                                                for owner_idx, owner in enumerate(self.auction.owners)],
+        # represents the action legality for doing nothing - only legal action is 0 bid for player 0
+        self._do_nothing = [0] * self.action_space.n
+        self._do_nothing[0] = 1
+
     @classmethod
     def action_index(cls, auction, player_index, bid):
         """
@@ -115,7 +122,17 @@ class FantasyFootballAuctionEnv(gym.Env):
             action of nominating / bidding for the specified player with the specified
             bid amount.
         """
-        return player_index * auction.money + bid
+        return player_index * (FantasyFootballAuctionEnv.max_bid_overall(auction)+1) + bid
+
+    @classmethod
+    def max_bid_overall(cls, auction):
+        """
+
+        :param Auction auction for which the max bid should be calculated
+        :return int: representing the max possible bid that can be submitted -
+            equivalent to the total money - number of roster slots (i.e. have to save 1 dollar per slot
+        """
+        return auction.money - (len(auction.roster)-1)
 
     def _action_space(self):
         """
@@ -128,12 +145,15 @@ class FantasyFootballAuctionEnv(gym.Env):
 
         We flatten this 2-d matrix into a list to get our one action
 
-        It's flattened, so this is represented as a Discrete
+        It's flattened, so this is represented as a Discrete.
+
+        An action of bidding 0 on player 0 is, by definition, our "do nothing" action
 
         :return: the action space
         """
 
-        return spaces.Discrete((len(self.players)-1) * self.money)
+        # they can bid 0 - max_bid_overall, inclusive
+        return spaces.Discrete(len(self.players) * (self._max_bid_overall+1))
 
     def _observation_space(self):
         """
@@ -152,10 +172,10 @@ class FantasyFootballAuctionEnv(gym.Env):
             dimensions.append(spaces.MultiDiscrete([[0, 1]] * num_players))
         # one per owner - indicating bid value for the player
         for _ in range(num_owners):
-            dimensions.append(spaces.MultiDiscrete([[0, self.money]] * num_players))
+            dimensions.append(spaces.MultiDiscrete([[0, self._max_bid_overall]] * num_players))
         # one per owner - indicating max bid
         for _ in range(num_owners):
-            dimensions.append(spaces.MultiDiscrete([[0, self.money]] * num_players))
+            dimensions.append(spaces.MultiDiscrete([[0, self._max_bid_overall]] * num_players))
         # one per owner - indicating whether player is draftable by the owner
         for _ in range(num_owners):
             dimensions.append(spaces.MultiDiscrete([[0, 1]] * num_players))
@@ -164,7 +184,7 @@ class FantasyFootballAuctionEnv(gym.Env):
 
         # fixed layers
         # ECT value of player
-        dimensions.append(spaces.MultiDiscrete([[0, self.money]] * num_players))
+        dimensions.append(spaces.MultiDiscrete([[0, self._max_bid_overall]] * num_players))
         # one layer, binary, per possible position, in this order
         # QB = 0
         # RB = 1
@@ -203,7 +223,7 @@ class FantasyFootballAuctionEnv(gym.Env):
         observation = [
             # one per owner - indicting ownership
             # this is slow and should be stored in memory rather than calculated each step
-            *self._encoded_players_ownership,
+            *self._encoded_players_ownership.tolist(),
             # one per owner per player, bid values for the player (only nonzero for current
             # nominee)
             *[[0 if player_idx == self.auction.nominee_index() else self.auction.bids[owner_idx]
@@ -220,7 +240,7 @@ class FantasyFootballAuctionEnv(gym.Env):
             # fixed input layer - player value
             [player.value for player in self.players],
             # fixed input layer - binary - one per possible position - player position.
-            *[[player.position == position for player in self.players] for position in Position]
+            *[[1 if player.position == position else 0 for player in self.players] for position in Position]
         ]
 
         return observation
@@ -262,6 +282,68 @@ class FantasyFootballAuctionEnv(gym.Env):
         outfile.write('turn count: ' + str(self.turn_count) + '\n')
         return outfile
 
+
+
+    def action_legality(self):
+        """
+
+        :return list(int): array corresponding to the action space,
+            where only actions which are legal for the agent are set to 1, all others set to 0
+        """
+
+        if self.done or \
+           (self.auction.state == AuctionState.NOMINATE and self.auction.turn_index != 0):
+            # if it is done or it is nomination but not my turn, only legal action is to do nothing
+            return self._do_nothing
+        elif self.auction.state == AuctionState.NOMINATE and self.auction.turn_index == 0:
+            # if it is my turn to nominate, legal actions are to nominate a player
+            # which is not already purchased which this player can buy
+            # (i.e. draftable player), for a value less than the current
+            # max bid. Cannot nominate for 0.
+            max_bid = self.auction.owners[0].max_bid()
+            return [1 if self._encoded_players_draftability[0][self.player_index_of_action(action_idx)] == 1 and
+                    0 < self.bid_of_action(action_idx) <= max_bid else 0
+                    for action_idx in range(self.action_space.n)]
+        else:
+            # it is bidding time. Legal actions are to submit a bid for the player who is currently up
+            # for nomination, where the bid is greater than the current bid to beat but
+            # less than the agent's maximum bid, only if the player is draftable
+            min_bid = max(self.auction.bids) + 1
+            if self.auction.owners[0].can_buy(self.auction.nominee, min_bid):
+                # can still bid on that player for any amount between max bid and current bid to beat
+                max_bid = self.auction.owners[0].max_bid()
+                return [1 if self.auction.nominee_index() == self.player_index_of_action(action_idx) and
+                        max_bid >= self.bid_of_action(action_idx) >= min_bid
+                        else 0
+                        for action_idx in range(self.action_space.n)]
+            else:
+                # can't still bid - can't take any action
+                return self._do_nothing
+
+
+    def player_index_of_action(self, action):
+        """
+
+        :param action: int representing the action to take from the action space
+        :return int: index of the player represented by that action
+        """
+        return action // (self._max_bid_overall+1)
+
+    def bid_of_action(self, action):
+        """
+
+        :param action: int representing the action to take from the action space
+        :return int: bid amount represented by that action
+        """
+        return action % (self._max_bid_overall+1)
+
+    def _debug_action_legality(self):
+        # returns a 2d, unflattened array, indexed like [player_idx][money], with each
+        # value set to 1 or 0 based on whether it is marked as legal or illegal
+        action_legality = self.action_legality()
+        return [[action_legality[FantasyFootballAuctionEnv.action_index(self.auction,player_idx,bid)] for bid in range(self._max_bid_overall+1)] for player_idx
+                in range(len(self.players))]
+
     def _act(self, action, owner_idx):
         """
 
@@ -273,9 +355,9 @@ class FantasyFootballAuctionEnv(gym.Env):
 
         # based on the index, figure out the action
         # player index is the row (in the original 2-d matrix)
-        player_index = action // self.money
+        player_index = self.player_index_of_action(action)
         # bid is the column(in the original 2-d matrix)
-        bid = action % self.money
+        bid = self.bid_of_action(action)
 
         try:
             # 0 bid means do nothing
