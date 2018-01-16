@@ -63,7 +63,8 @@ register(
                       SimpleScriptedFantasyFootballAgent()],
         'players': players, 'money': 200,
         'roster': [RosterSlot.QB, RosterSlot.WR, RosterSlot.RB, RosterSlot.TE, RosterSlot.WRRBTE],
-        'starter_value': 1
+        'starter_value': 1,
+        'reward_function': '3'
     }
 )
 
@@ -80,7 +81,8 @@ register(
                       SimpleScriptedFantasyFootballAgent()],
         'players': players, 'money': 200,
         'roster': [RosterSlot.QB, RosterSlot.WR, RosterSlot.RB, RosterSlot.TE, RosterSlot.WRRBTE],
-        'starter_value': 1
+        'starter_value': 1,
+        'reward_function': '3'
     }
 )
 
@@ -98,7 +100,8 @@ register(
         'roster': [RosterSlot.QB, RosterSlot.WR, RosterSlot.WR,
                    RosterSlot.RB, RosterSlot.RB, RosterSlot.TE, RosterSlot.WRRBTE, RosterSlot.K, RosterSlot.DST,
                    RosterSlot.BN, RosterSlot.BN, RosterSlot.BN, RosterSlot.BN, RosterSlot.BN, RosterSlot.BN],
-        'starter_value': .9
+        'starter_value': .9,
+        'reward_function': '3'
     }
 )
 
@@ -110,11 +113,14 @@ register(
     kwargs={
         'opponents': [SimpleScriptedFantasyFootballAgent(),
                       SimpleScriptedFantasyFootballAgent(),
+                      SimpleScriptedFantasyFootballAgent(),
+                      SimpleScriptedFantasyFootballAgent(),
                       SimpleScriptedFantasyFootballAgent()],
         'players': players, 'money': 200,
         'roster': [RosterSlot.QB, RosterSlot.WR, RosterSlot.WR,
                    RosterSlot.RB, RosterSlot.RB, RosterSlot.TE, RosterSlot.WRRBTE, RosterSlot.K, RosterSlot.DST,
                    RosterSlot.BN, RosterSlot.BN, RosterSlot.BN, RosterSlot.BN, RosterSlot.BN, RosterSlot.BN],
-        'starter_value': .9
+        'starter_value': .9,
+        'reward_function': '3'
     }
 )
