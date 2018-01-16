@@ -54,7 +54,7 @@ class FantasyFootballAuctionEnv(gym.Env):
         :param str reward_function: optional. option for which reward function to use. Possible values are:
             1 - reward at end of game based on ratio of my_score / max(scores). 0 during game
             2 - reward at end of game - 1 for victory, -1 for loss. 0 otherwise.
-            3 - reward with player_value every time player is acquired, punish with player_value every time
+            3 - reward with player_value every time player is acquired, punish with player_value / num_opponents every time
                    another owner gets a player (make sure to consider bench in value calculation). 0 otherwise.
             #.1 where # is 1-3 - same as 1-3 but we punish the agent with -1 and terminal state on illegal move.
                 However, for 1.3, since we need to overcome the punishment of opponents drafting other players,
@@ -491,7 +491,8 @@ class FantasyFootballAuctionEnv(gym.Env):
         elif self.reward_function.startswith("3"):
             # calculate delta in score for this step
             new_values = self.auction.scores(self.starter_value)
-            deltas = [new_values[i] - self._previous_values[i] if i == 0 else self._previous_values[i] - new_values[i]
+            deltas = [new_values[i] - self._previous_values[i] if i == 0 else
+                      (self._previous_values[i] - new_values[i]) / len(self.opponents)
                       for i in range(len(new_values))]
             self._previous_values = new_values
             return reduce(lambda x, y: x + y, deltas)

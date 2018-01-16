@@ -47,7 +47,8 @@ register(
                       SimpleScriptedFantasyFootballAgent()],
         'players': players, 'money': 200,
         'roster': [RosterSlot.QB, RosterSlot.WR, RosterSlot.RB],
-        'starter_value': 1
+        'starter_value': 1,
+        'reward_function': '3'
     }
 )
 
