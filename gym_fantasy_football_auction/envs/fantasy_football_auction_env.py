@@ -211,6 +211,45 @@ class FantasyFootballAuctionEnv(gym.Env):
         """
         pass
 
+    def observation_from_perspective(self, perspective_index):
+        """
+        Generates an observation with the owner with owner_idx as owner 0
+        :param int perspective_index: index of owner who should be treated as owner 0
+        :return:
+        """
+        num_players = len(self.players)
+        num_owners = len(self.opponents) + 1
+
+        # this makes all of these look like they are from the perspective of the specified owner
+        shifted_ownership = np.roll(self._encoded_players_ownership, -perspective_index)
+        shifted_draftability = np.roll(self._encoded_players_ownership, -perspective_index)
+
+        observation = [
+            # one per owner - indicting ownership
+            # this is slow and should be stored in memory rather than calculated each step
+            *shifted_ownership.tolist(),
+            # one per owner per player, bid values for the player (only nonzero for current
+            # nominee)
+            *[[0 if player_idx == self.auction.nominee_index() else self.auction.bids[owner_idx]
+               for player_idx in range(num_players)]
+              for owner_idx in np.roll(range(num_owners), -perspective_index)],
+            # one per owner per player, max bid value (regardless of player)
+            *[[owner.max_bid()] * num_players
+              for owner in np.roll(num_owners, -perspective_index)],
+            # one per owner per player - draftability
+            # this is slow and should be stored in memory rather than calculated each step
+            *shifted_draftability,
+            # one binary layer - all ones if it is nomination time for owner 0 (the agent)
+            [
+                1 if self.auction.state == AuctionState.NOMINATE and self.auction.nominee_index() == perspective_index else 0] * num_players,
+            # fixed input layer - player value
+            [player.value for player in self.players],
+            # fixed input layer - binary - one per possible position - player position.
+            *[[1 if player.position == position else 0 for player in self.players] for position in Position]
+        ]
+
+        return observation
+
     def _encode_auction(self):
         """
 
