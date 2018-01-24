@@ -37,11 +37,18 @@ class SimpleScriptedFantasyFootballAgent(FantasyFootballAgent):
     """
     A simple scripted agent. Target bids at within a random distance of
     the value of each player.
+
+    Difficulty parameter controls strength. The higher the value, the closer to true value the agent will bid.
+    The lower the value, the further from the value the agent will bid.
+
+    Attributes:
+        :ivar float valuation: float. This agent will valuate all players at actual*valuation.
     """
 
-    def __init__(self):
+    def __init__(self, valuation=0.8):
         self.target = 0
         self.target_player = None
+        self.valuation = valuation
 
     def reset(self):
         self.target = 0
@@ -56,18 +63,13 @@ class SimpleScriptedFantasyFootballAgent(FantasyFootballAgent):
             # find the next player that we can buy (for at least the minimum)
             for player in auction.undrafted_players:
                 if owner_me.can_buy(player, 1):
-                    # nominate at some percentage of
-                    # the real value, start at half
-                    percent = random.uniform(0.8, 1.2)
-                    self.target = int(round(min(max(percent * player.value, 1), owner_me.max_bid())))
+                    self.target = int(round(min(max(self.valuation * player.value, 1), owner_me.max_bid())))
                     self.target_player = player
                     return FantasyFootballAuctionEnv.action_index(auction, auction.players.index(player),
                                                                   max(1, int(round(self.target / 2.0))))
         elif auction.state == AuctionState.BID:
             if self.target_player != auction.nominee and owner_me.can_buy(auction.nominee, 1):
-                # new target needs to be set if we can draft this player (for at least the min amount)
-                percent = random.uniform(0.8, 1.2)
-                self.target = int(round(percent * auction.nominee.value))
+                self.target = int(round(self.valuation * auction.nominee.value))
                 self.target_player = auction.nominee
 
             # walk up to the target if it is not yet exceeded, if we aren't the current winner,
