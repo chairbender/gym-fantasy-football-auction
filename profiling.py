@@ -19,10 +19,10 @@ def test_with_seed(seed):
     random.seed(seed)
 
     # create a mock game with 6 of this agent and use this agent in it, verify that the game completes
-    me = SimpleScriptedFantasyFootballAgent()
-    opponents = [SimpleScriptedFantasyFootballAgent(), SimpleScriptedFantasyFootballAgent(),
-                 SimpleScriptedFantasyFootballAgent(), SimpleScriptedFantasyFootballAgent(),
-                 SimpleScriptedFantasyFootballAgent()]
+    me = SimpleScriptedFantasyFootballAgent(200, 0.1, 0.1)
+    opponents = [SimpleScriptedFantasyFootballAgent(200, 0.1, 0.1), SimpleScriptedFantasyFootballAgent(200, 0.1, 0.1),
+                 SimpleScriptedFantasyFootballAgent(200, 0.1, 0.1), SimpleScriptedFantasyFootballAgent(200, 0.1, 0.1),
+                 SimpleScriptedFantasyFootballAgent(200, 0.1, 0.1)]
 
     env = FantasyFootballAuctionEnv(opponents,
                                     players,

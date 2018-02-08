@@ -17,10 +17,10 @@ players = players_from_fantasypros_cheatsheet(PLAYERS_CSV_PATH)
 def test_with_seed(seed):
     random.seed(seed)
     # create a mock game with 6 of this agent and use this agent in it, verify that the game completes
-    me = SimpleScriptedFantasyFootballAgent()
-    opponents = [SimpleScriptedFantasyFootballAgent(), SimpleScriptedFantasyFootballAgent(),
-                 SimpleScriptedFantasyFootballAgent(), SimpleScriptedFantasyFootballAgent(),
-                 SimpleScriptedFantasyFootballAgent()]
+    me = SimpleScriptedFantasyFootballAgent(200, 0.9, 0.1)
+    opponents = [SimpleScriptedFantasyFootballAgent(200, 0.9, 0.1), SimpleScriptedFantasyFootballAgent(200, 0.9, 0.1),
+                 SimpleScriptedFantasyFootballAgent(200, 0.9, 0.1), SimpleScriptedFantasyFootballAgent(200, 0.9, 0.1),
+                 SimpleScriptedFantasyFootballAgent(200, 0.9, 0.1)]
 
     env = FantasyFootballAuctionEnv(opponents,
                                     players,
@@ -72,36 +72,20 @@ class FantasyFootballAuctionEnvTestCase(TestCase):
         test_with_seed(1514540459)
 
     def test_easy_env_with_gym(self):
-        env = gym.make('FantasyFootballAuction-2OwnerSmallRosterSimpleScriptedOpponent-v0')
+        env = gym.make('FFEnv1-v0')
         test_gym_env_with_seed(env, 111)
         test_gym_env_with_seed(env, 222)
         test_gym_env_with_seed(env, 333)
 
-        env = gym.make('FantasyFootballAuction-4OwnerSmallRosterSimpleScriptedOpponent-v0')
+        env.reset()
         test_gym_env_with_seed(env, 111)
         test_gym_env_with_seed(env, 222)
         test_gym_env_with_seed(env, 333)
 
-        env = gym.make('FantasyFootballAuction-4OwnerMediumRosterSimpleScriptedOpponent-v0')
+        env.reset()
         test_gym_env_with_seed(env, 111)
         test_gym_env_with_seed(env, 222)
         test_gym_env_with_seed(env, 333)
-
-        env = gym.make('FantasyFootballAuction-6OwnerMediumRosterSimpleScriptedOpponent-v0')
-        test_gym_env_with_seed(env, 111)
-        test_gym_env_with_seed(env, 222)
-        test_gym_env_with_seed(env, 333)
-
-        env = gym.make('FantasyFootballAuction-4OwnerFullRosterSimpleScriptedOpponent-v0')
-        test_gym_env_with_seed(env, 111)
-        test_gym_env_with_seed(env, 222)
-        test_gym_env_with_seed(env, 333)
-
-        env = gym.make('FantasyFootballAuction-6OwnerFullRosterSimpleScriptedOpponent-v0')
-        test_gym_env_with_seed(env, 111)
-        test_gym_env_with_seed(env, 222)
-        test_gym_env_with_seed(env, 333)
-
 
 
 

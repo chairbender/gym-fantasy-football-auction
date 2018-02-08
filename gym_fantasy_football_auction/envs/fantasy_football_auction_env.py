@@ -53,7 +53,8 @@ class FantasyFootballAuctionEnv(gym.Env):
             winners.
         :param str reward_function: optional. option for which reward function to use. Possible values are:
             1 - reward at end of game based on ratio of my_score / max(scores). 0 during game
-            2 - reward at end of game - 1 for victory, -1 for loss. 0 otherwise.
+            2 - reward at end of game based on standing - evenly distributed between 1 and -1 for first and
+             last place. 0 otherwise.
             3 - reward with player_value every time player is acquired, punish with player_value / num_opponents every time
                    another owner gets a player (make sure to consider bench in value calculation). 0 otherwise.
             #.1 where # is 1-3 - same as 1-3 but we punish the agent with -1 and terminal state on illegal move.
@@ -227,7 +228,7 @@ class FantasyFootballAuctionEnv(gym.Env):
             *self._encoded_players_ownership.tolist(),
             # one per owner per player, bid values for the player (only nonzero for current
             # nominee)
-            *[[0 if player_idx == self.auction.nominee_index() else self.auction.bids[owner_idx]
+            *[[0 if player_idx != self.auction.nominee_index() else self.auction.bids[owner_idx]
                 for player_idx in range(num_players)]
                 for owner_idx in range(num_owners)],
             # one per owner per player, max bid value (regardless of player)
@@ -484,8 +485,13 @@ class FantasyFootballAuctionEnv(gym.Env):
         elif self.reward_function.startswith("2"):
             if self.done:
                 scores = self.auction.scores(self.starter_value)
-                my_score = scores[0]
-                return 1 if my_score == max(scores) else -1
+                order = sorted(range(len(scores)), key=lambda k: scores[k], reverse=True)
+                my_index = order[0]
+                # interpolate linearly between 1 and -1 based on position
+                slope = -2 / (len(self.opponents))
+                my_score = 1 + slope * my_index
+
+                return my_score
             else:
                 return 0.
         elif self.reward_function.startswith("3"):
