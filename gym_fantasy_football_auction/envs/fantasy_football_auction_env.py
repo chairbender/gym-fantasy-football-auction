@@ -52,7 +52,8 @@ class FantasyFootballAuctionEnv(gym.Env):
             be weighted between starter and bench. If 1, for example, bench value will be ignored when calculating
             winners.
         :param str reward_function: optional. option for which reward function to use. Possible values are:
-            1 - reward at end of game based on ratio of my_score / max(scores). 0 during game
+            1 - reward at end of game based on ratio of my_score / max(scores). +1 added for winning (for a total of 2).
+                0 during game
             2 - reward at end of game based on standing - evenly distributed between 1 and -1 for first and
              last place. 0 otherwise.
             3 - reward with player_value every time player is acquired, punish with player_value / num_opponents every time
@@ -479,7 +480,10 @@ class FantasyFootballAuctionEnv(gym.Env):
             if self.done:
                 scores = self.auction.scores(self.starter_value)
                 my_score = scores[0]
-                return my_score / max(scores)
+                if my_score == max(scores):
+                    return 2.  # add a bonus +1 for winning
+                else:
+                    return my_score / max(scores)
             else:
                 return 0.
         elif self.reward_function.startswith("2"):
